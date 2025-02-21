@@ -1,0 +1,1 @@
+./bazel-bin/quiche/quic_client --host=$1 --port=6121 --disable_certificate_verification https://www.example.org

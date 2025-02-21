@@ -11,14 +11,15 @@ bazel-*
 *.pyd
 
 # Ignore Bazel output files
-/bazel-out/
-/bazel-bin/
-/bazel-testlogs/
-/bazel-genfiles/
-/bazel-workspaces/
-/bazel-execroot/
-/bazel-distdir/
-/bazel-repo-cache/
+bazel-out
+bazel-bin
+bazel-testlogs
+bazel-genfiles
+bazel-workspaces
+bazel-execroot
+bazel-distdir
+bazel-repo-cache
+bazel-quiche
 
 # Ignore local build artifacts
 /build/
