@@ -1,0 +1,48 @@
+# Ignore Bazel build directories
+bazel-*
+.bazelrc.user
+*.runfiles/
+*.runfiles_manifest
+*.params
+*.log
+*.cache
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore Bazel output files
+/bazel-out/
+/bazel-bin/
+/bazel-testlogs/
+/bazel-genfiles/
+/bazel-workspaces/
+/bazel-execroot/
+/bazel-distdir/
+/bazel-repo-cache/
+
+# Ignore local build artifacts
+/build/
+out/
+target/
+*.o
+*.so
+*.d
+*.lo
+*.la
+*.cmd
+*.gcno
+*.gcda
+*.gcov
+*.dwo
+*.su
+
+# Ignore Bazel external dependencies
+/external/
+
+# Ignore editor & OS-specific files
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
