@@ -479,20 +479,22 @@ int QuicToyClient::SendRequestsAndPrintResponses(
       }
 
       std::cout << "Response:" << std::endl;
-      std::cout << "headers: " << client->latest_response_headers()
-                << std::endl;
-      std::string response_body = client->latest_response_body();
-      if (!quiche::GetQuicheCommandLineFlag(FLAGS_body_hex).empty()) {
-        // Assume response is binary data.
-        std::cout << "body:\n"
-                  << QuicheTextUtils::HexDump(response_body) << std::endl;
-      } else {
-        std::cout << "body: " << response_body << std::endl;
-      }
-      std::cout << "trailers: " << client->latest_response_trailers()
-                << std::endl;
-      std::cout << "early data accepted: " << client->EarlyDataAccepted()
-                << std::endl;
+      // std::cout << "headers: " << client->latest_response_headers()
+      //           << std::endl;
+      // std::string response_body = client->latest_response_body();
+      // if (!quiche::GetQuicheCommandLineFlag(FLAGS_body_hex).empty()) {
+      //   // Assume response is binary data.
+      //   std::cout << "body:\n"
+      //             << QuicheTextUtils::HexDump(response_body) << std::endl;
+      // } else {
+      //   std::cout << "body: " << response_body << std::endl;
+      // }
+      // std::cout << "trailers: " << client->latest_response_trailers()
+      //           << std::endl;
+      // std::cout << "early data accepted: " << client->EarlyDataAccepted()
+      //           << std::endl;
+
+      std::cout << "-- skip --" << std::endl;
       QUIC_LOG(INFO) << "Request completed with TTFB(us): "
                      << client->latest_ttfb().ToMicroseconds() << ", TTLB(us): "
                      << client->latest_ttlb().ToMicroseconds();

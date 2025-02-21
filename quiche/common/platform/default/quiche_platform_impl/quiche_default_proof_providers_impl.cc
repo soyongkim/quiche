@@ -58,6 +58,9 @@ std::unique_ptr<quic::ProofSource> CreateDefaultProofSourceImpl() {
   std::ifstream key_stream(key_file, std::ios::binary);
   std::unique_ptr<quic::CertificatePrivateKey> private_key =
       quic::CertificatePrivateKey::LoadPemFromStream(&key_stream);
+
+
+  std::cout << "[SD] key_file: " << key_file << std::endl;    
   if (private_key == nullptr) {
     QUICHE_LOG(FATAL) << "Failed to load private key from --key_file="
                       << key_file;

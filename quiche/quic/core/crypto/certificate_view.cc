@@ -245,13 +245,14 @@ PemReadResult ReadNextPemMessage(std::istream* input) {
   while (std::getline(*input, line_buffer)) {
     absl::string_view line(line_buffer);
     QuicheTextUtils::RemoveLeadingAndTrailingWhitespace(&line);
-
+    //std::cout << "[certificate_view.cc] line: " << line << std::endl;
     // Handle BEGIN lines.
     if (!pending_message && absl::StartsWith(line, kPemBegin) &&
         absl::EndsWith(line, kPemDashes)) {
       result.type = std::string(
           line.substr(kPemBegin.size(),
                       line.size() - kPemDashes.size() - kPemBegin.size()));
+      //std::cout << "[certificate_view.cc] result.type: " << result.type << std::endl;
       expected_end = absl::StrCat(kPemEnd, result.type, kPemDashes);
       pending_message = true;
       continue;
