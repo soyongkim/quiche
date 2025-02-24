@@ -535,6 +535,8 @@ std::unique_ptr<QuicBackendResponse> MasqueServerSession::HandleMasqueRequest(
 
     return response;
   }
+
+  // [SD] this part is to find the target host and port from the path
   // Extract target host and port from path using default template.
   std::vector<absl::string_view> path_split = absl::StrSplit(path, '/');
   if (path_split.size() != 7 || !path_split[0].empty() ||
@@ -603,6 +605,10 @@ std::unique_ptr<QuicBackendResponse> MasqueServerSession::HandleMasqueRequest(
         << request_handler->stream_id();
     return CreateBackendErrorResponse("500", "Bad stream type");
   }
+
+  // [SD] this part is to create a new ConnectUdpServerState and add it to the
+  // connect_udp_server_states_ list
+  
   connect_udp_server_states_.push_back(ConnectUdpServerState(
       stream, target_server_address, fd_wrapper.extract_fd(), this));
 

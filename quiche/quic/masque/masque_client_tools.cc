@@ -59,6 +59,7 @@ class FakeAddressRemover {
 
 }  // namespace
 
+// [SD] Create Masque client and connect to the MASQUE proxy.
 std::unique_ptr<MasqueEncapsulatedClient>
 CreateAndConnectMasqueEncapsulatedClient(
     MasqueClient* masque_client, MasqueMode masque_mode,
@@ -173,6 +174,10 @@ bool SendRequestOnMasqueEncapsulatedClient(MasqueEncapsulatedClient& client,
   const std::string response_body = client.latest_response_body();
   QUIC_LOG(INFO) << "Request succeeded for " << url_string << std::endl
                  << response_body;
+
+  std::cout << "Request succeeded for " << url_string << std::endl
+              << response_body << std::endl;
+
 
   return true;
 }

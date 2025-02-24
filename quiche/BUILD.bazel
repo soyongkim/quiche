@@ -288,43 +288,43 @@ cc_library(
     ],
 )
 
-# test_suite_from_source_list(
-#     name = "quiche_tests",
-#     srcs = quiche_tests_srcs,
-#     data = glob([
-#         "common/platform/api/testdir/**",
-#         "quic/test_tools/quic_http_response_cache_data/**",
-#     ]),
-#     deps = [
-#         ":balsa",
-#         ":binary_http",
-#         ":oblivious_http",
-#         ":quiche_core",
-#         ":quiche_protobufs_testonly_cc_proto",
-#         ":quiche_test_support",
-#         ":quiche_tool_support",
-#         "@boringssl//:crypto",
-#         "@boringssl//:ssl",
-#         "@abseil-cpp//absl/algorithm:container",
-#         "@abseil-cpp//absl/base:core_headers",
-#         "@abseil-cpp//absl/container:flat_hash_map",
-#         "@abseil-cpp//absl/container:flat_hash_set",
-#         "@abseil-cpp//absl/container:node_hash_map",
-#         "@abseil-cpp//absl/flags:flag",
-#         "@abseil-cpp//absl/functional:bind_front",
-#         "@abseil-cpp//absl/hash",
-#         "@abseil-cpp//absl/memory",
-#         "@abseil-cpp//absl/numeric:int128",
-#         "@abseil-cpp//absl/status",
-#         "@abseil-cpp//absl/status:statusor",
-#         "@abseil-cpp//absl/strings",
-#         "@abseil-cpp//absl/strings:str_format",
-#         "@abseil-cpp//absl/synchronization",
-#         "@abseil-cpp//absl/types:optional",
-#         "@abseil-cpp//absl/types:span",
-#         "@googletest//:gtest_main",
-#     ],
-# )
+test_suite_from_source_list(
+    name = "quiche_tests",
+    srcs = quiche_tests_srcs,
+    data = glob([
+        "common/platform/api/testdir/**",
+        "quic/test_tools/quic_http_response_cache_data/**",
+    ]),
+    deps = [
+        ":balsa",
+        ":binary_http",
+        ":oblivious_http",
+        ":quiche_core",
+        ":quiche_protobufs_testonly_cc_proto",
+        ":quiche_test_support",
+        ":quiche_tool_support",
+        "@boringssl//:crypto",
+        "@boringssl//:ssl",
+        "@abseil-cpp//absl/algorithm:container",
+        "@abseil-cpp//absl/base:core_headers",
+        "@abseil-cpp//absl/container:flat_hash_map",
+        "@abseil-cpp//absl/container:flat_hash_set",
+        "@abseil-cpp//absl/container:node_hash_map",
+        "@abseil-cpp//absl/flags:flag",
+        "@abseil-cpp//absl/functional:bind_front",
+        "@abseil-cpp//absl/hash",
+        "@abseil-cpp//absl/memory",
+        "@abseil-cpp//absl/numeric:int128",
+        "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/status:statusor",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/strings:str_format",
+        "@abseil-cpp//absl/synchronization",
+        "@abseil-cpp//absl/types:optional",
+        "@abseil-cpp//absl/types:span",
+        "@googletest//:gtest_main",
+    ],
+)
 
 cc_library(
     name = "io_tool_support",
@@ -470,54 +470,6 @@ cc_binary(
     ],
 )
 
-# cc_binary(
-#     name = "epoll_quic_server",
-#     srcs = [
-#       "src/quiche/quic/tools/quic_server_bin.cc",
-#       "src/quiche/quic/tools/quic_server_factory.cc",
-#       "src/quiche/quic/tools/quic_server_factory.h",
-#     ],
-#     deps = [
-#       ":epoll_tool_support",
-#       ":quic_server_core",
-#       ":quiche_tool_support",
-#       "//base",
-#       "//net",
-#       "//third_party/boringssl",
-#     ],
-#     deps = [
-#         ":io_tool_support",
-#         ":quic_server_factory",
-#         ":quic_toy_server",
-#         ":quiche_core",
-#         ":quiche_tool_support",
-#         "@abseil-cpp//absl/strings",
-#     ],
-# )
-
-
-#   executable("epoll_quic_server") {
-#     testonly = true
-#     sources = [
-#       "src/quiche/quic/tools/quic_server_bin.cc",
-#       "src/quiche/quic/tools/quic_server_factory.cc",
-#       "src/quiche/quic/tools/quic_server_factory.h",
-#     ]
-
-#     configs += [ ":quiche_internal_config" ]
-#     public_configs = [ ":quiche_config" ]
-
-#     deps = [
-#       ":epoll_tool_support",
-#       ":quic_server_core",
-#       ":quiche_tool_support",
-#       "//base",
-#       "//net",
-#       "//third_party/boringssl",
-#     ]
-#   }
-
-
 
 cc_binary(
     name = "masque_client",
@@ -557,8 +509,8 @@ cc_binary(
     ],
 )
 
-# # Indicate that QUICHE APIs are explicitly unstable by providing only
-# # appropriately named aliases as publicly visible targets.
+# Indicate that QUICHE APIs are explicitly unstable by providing only
+# appropriately named aliases as publicly visible targets.
 alias(
     name = "quiche_unstable_api",
     actual = ":quiche_core",

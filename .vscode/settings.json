@@ -77,6 +77,8 @@
         "cfenv": "cpp",
         "future": "cpp",
         "valarray": "cpp",
-        "complex": "cpp"
+        "complex": "cpp",
+        "charconv": "cpp",
+        "format": "cpp"
     }
 }

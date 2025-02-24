@@ -392,6 +392,12 @@ int RunMasqueClient(int argc, char* argv[]) {
     url::Parsed parsed_uri_template;
     url::ParseStandardURL(uri_template.c_str(), uri_template.length(),
                           &parsed_uri_template);
+
+    // QUIC_LOG(INFO) << "Parsed URL: " << parsed_uri_template.host.begin << " Length: " << parsed_uri_template.host.len;
+
+
+    std::cout << "parsed_uri scheme: " << parsed_uri_template.scheme << " host: " << parsed_uri_template.host << " path: " << parsed_uri_template.path << std::endl;
+
     if (!parsed_uri_template.scheme.is_nonempty() ||
         !parsed_uri_template.host.is_nonempty() ||
         !parsed_uri_template.path.is_nonempty()) {
@@ -413,6 +419,9 @@ int RunMasqueClient(int argc, char* argv[]) {
           MasqueClient::Create(uri_template, masque_mode, event_loop.get(),
                                std::move(proof_verifier));
     } else {
+      // [SD] This is a hack to allow the encapsulated client to use the same
+      // event loop as the underlying client. This is not a good idea in
+      // general, but it is useful for testing.
       masque_client = tools::CreateAndConnectMasqueEncapsulatedClient(
           masque_clients.back().get(), masque_mode, event_loop.get(),
           uri_template, disable_certificate_verification,
@@ -472,6 +481,7 @@ int RunMasqueClient(int argc, char* argv[]) {
       // Print the response body to stdout.
       std::cout << std::endl << stream->data() << std::endl;
     } else {
+      // [SD] this part is to send the real request to the tareget server maybe
       std::unique_ptr<MasqueEncapsulatedClient> encapsulated_client =
           tools::CreateAndConnectMasqueEncapsulatedClient(
               masque_client.get(), masque_mode, event_loop.get(), urls[i],

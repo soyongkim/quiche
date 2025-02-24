@@ -1,0 +1,1 @@
+./bazel-bin/quiche/masque_server --certificate_file=certs/out/leaf_cert.pem --key_file=certs/out/leaf_cert.pkcs8
