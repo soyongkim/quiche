@@ -393,10 +393,7 @@ int RunMasqueClient(int argc, char* argv[]) {
     url::ParseStandardURL(uri_template.c_str(), uri_template.length(),
                           &parsed_uri_template);
 
-    // QUIC_LOG(INFO) << "Parsed URL: " << parsed_uri_template.host.begin << " Length: " << parsed_uri_template.host.len;
-
-
-    std::cout << "parsed_uri scheme: " << parsed_uri_template.scheme << " host: " << parsed_uri_template.host << " path: " << parsed_uri_template.path << std::endl;
+    // std::cout << "parsed_uri scheme: " << parsed_uri_template.scheme << " host: " << parsed_uri_template.host << " path: " << parsed_uri_template.path << std::endl;
 
     if (!parsed_uri_template.scheme.is_nonempty() ||
         !parsed_uri_template.host.is_nonempty() ||

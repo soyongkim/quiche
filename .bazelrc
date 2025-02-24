@@ -3,20 +3,16 @@ common --enable_platform_specific_config
 # Disable bzlmod for now.
 #common --noenable_bzlmod
 
-# [SD] Try to bzl mod
+# [SD] Enable bzlmod
 common --enable_bzlmod
-
 
 # original one
 #build --cxxopt=-std=c++17
 
-# try use c++20
+# [SD] Try to use c++20
 build --cxxopt=-std=c++20
 
 build --cxxopt=-fno-rtti
-
-# [SD] 
-
 
 
 # Enable Abseil/Googletest integration

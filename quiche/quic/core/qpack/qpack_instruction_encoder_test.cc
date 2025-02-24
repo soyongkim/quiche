@@ -51,6 +51,8 @@ class QpackInstructionWithValuesPeer {
 
 namespace {
 
+
+// [SD] HuffmanEncoding() -> GetHuffmanEncoding()
 class QpackInstructionEncoderTest : public QuicTestWithParam<bool> {
  protected:
   QpackInstructionEncoderTest()

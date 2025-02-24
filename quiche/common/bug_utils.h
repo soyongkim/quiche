@@ -95,6 +95,7 @@ class QUICHE_EXPORT GenericBugStreamHandler {
 
   // For types that support only operator<<. There's a better solution in
   // Abseil, but unfortunately OStringStream is in a namespace marked internal.
+  // [SD] .view() -> .str()
   template <typename T,
             std::enable_if_t<!absl::HasAbslStringify<T>::value, bool> = true>
   GenericBugStreamHandler& operator<<(const T& v) {
