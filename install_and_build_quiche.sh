@@ -9,7 +9,7 @@ curl -fsSL https://bazel.build/bazel-release.pub.gpg | gpg --dearmor > bazel-arc
 sudo mv bazel-archive-keyring.gpg /usr/share/keyrings || { echo "Failed to move Bazel keyring"; exit 1; }
 echo "deb [arch=amd64 signed-by=/usr/share/keyrings/bazel-archive-keyring.gpg] https://storage.googleapis.com/bazel-apt stable jdk1.8" | sudo tee /etc/apt/sources.list.d/bazel.list || { echo "Failed to add Bazel repository"; exit 1; }
 sudo apt update -y || { echo "Failed to update package list"; exit 1; }
-sudo apt install bazel -y || { echo "Failed to install Bazel"; exit 1; }
+sudo apt install bazel-7.0.0 -y || { echo "Failed to install Bazel"; exit 1; }
 sudo apt full-upgrade -y || { echo "Failed to upgrade packages"; exit 1; }
 sudo apt install libicu-dev -y || { echo "Failed to install libicu-dev"; exit 1; }
 

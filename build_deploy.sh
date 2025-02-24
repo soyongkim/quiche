@@ -2,8 +2,12 @@
 set -e
 set -o pipefail
 
-# Source the configuration
-source "$(dirname "$0")/config.sh"
+# for Deloyment
+REMOTE_HOST=("0.0.0.0" "0.0.0.0")
+REMOTE_USER="root"
+REMOTE_PATH="/your/path/quiche_deployment"
+SSH_KEY_PATH="${HOME}/.ssh/private_key"
+
 
 # Validate that at least one remote host is configured
 if [ ${#REMOTE_HOST[@]} -eq 0 ]; then
@@ -25,7 +29,7 @@ bazel build //... || { echo "Bazel build failed"; exit 1; }
 for host in "${REMOTE_HOST[@]}"; do
   echo "Deploying build output to ${host}..."
   scp $SSH_OPTION -r bazel-bin "${REMOTE_USER}@${host}:${REMOTE_PATH}" || { echo "Failed to deploy build output to ${host}"; exit 1; }
-  scp $SSH_OPTION quic_server.sh quic_client.sh masque_proxy.sh "${REMOTE_USER}@${host}:${REMOTE_PATH}" || { echo "Failed to send scripts to ${host}"; exit 1; }
+  scp $SSH_OPTION quic_server.sh quic_client.sh masque_proxy.sh masque_client.sh config.sh "${REMOTE_USER}@${host}:${REMOTE_PATH}" || { echo "Failed to send scripts to ${host}"; exit 1; }
   scp $SSH_OPTION -r certs quic-data "${REMOTE_USER}@${host}:${REMOTE_PATH}" || { echo "Failed to send server requirements to ${host}"; exit 1; }
 done
 
