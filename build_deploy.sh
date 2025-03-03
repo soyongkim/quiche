@@ -24,26 +24,29 @@ fi
 echo "Building Quiche..."
 bazel build //quiche:quic_server //quiche:quic_client //quiche:masque_server //quiche:masque_client || { echo "Bazel build failed"; exit 1; }
 
-# Ensure the remote device has the expected directory structure:
-# Create ${REMOTE_PATH}/bazel-bin/quiche on each remote host.
+# Ensure the remote device has the expected directory structure and deploy files
 for host in "${REMOTE_HOST[@]}"; do
-  echo "Creating remote directory ${REMOTE_PATH}/bazel-bin/quiche on ${host}..."
-  ssh $SSH_OPTION "${REMOTE_USER}@${host}" "mkdir -p ${REMOTE_PATH}/bazel-bin/quiche" || { echo "Failed to create remote directory on ${host}"; exit 1; }
-done
+  if [[ "$host" == "0.0.0.0" ]]; then
+    echo "Skipping host 0.0.0.0..."
+    continue
+  fi
 
-# Deploy the built binaries and additional files
-for host in "${REMOTE_HOST[@]}"; do
-  echo "Deploying build output to ${host}..."
-  scp $SSH_OPTION bazel-bin/quiche/masque_server "${REMOTE_USER}@${host}:${REMOTE_PATH}/bazel-bin/quiche/" || { echo "Failed to deploy masque_server to ${host}"; exit 1; }
-  scp $SSH_OPTION bazel-bin/quiche/masque_client "${REMOTE_USER}@${host}:${REMOTE_PATH}/bazel-bin/quiche/" || { echo "Failed to deploy masque_client to ${host}"; exit 1; }
-  scp $SSH_OPTION bazel-bin/quiche/quic_server "${REMOTE_USER}@${host}:${REMOTE_PATH}/bazel-bin/quiche/" || { echo "Failed to deploy quic_server to ${host}"; exit 1; }
-  scp $SSH_OPTION bazel-bin/quiche/quic_client "${REMOTE_USER}@${host}:${REMOTE_PATH}/bazel-bin/quiche/" || { echo "Failed to deploy quic_client to ${host}"; exit 1; }
-  
-  echo "Deploying scripts to ${host}..."
+  echo "Setting up ${host}..."
+
+  # Create required directory on remote host
+  ssh $SSH_OPTION "${REMOTE_USER}@${host}" "mkdir -p ${REMOTE_PATH}/bazel-bin/quiche" || { echo "Failed to create remote directory on ${host}"; exit 1; }
+
+  # Deploy binaries
+  for binary in masque_server masque_client quic_server quic_client; do
+    scp $SSH_OPTION "bazel-bin/quiche/${binary}" "${REMOTE_USER}@${host}:${REMOTE_PATH}/bazel-bin/quiche/" || { echo "Failed to deploy ${binary} to ${host}"; exit 1; }
+  done
+
+  # Deploy scripts
   scp $SSH_OPTION quic_server.sh quic_client.sh masque_proxy.sh masque_client.sh config.sh "${REMOTE_USER}@${host}:${REMOTE_PATH}" || { echo "Failed to deploy scripts to ${host}"; exit 1; }
-  
-  echo "Deploying server requirements to ${host}..."
+
+  # Deploy server requirements
   scp $SSH_OPTION -r certs quic-data "${REMOTE_USER}@${host}:${REMOTE_PATH}" || { echo "Failed to deploy server requirements to ${host}"; exit 1; }
+
 done
 
 echo "Build and deployment completed successfully!"
