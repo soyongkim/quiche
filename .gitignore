@@ -50,3 +50,4 @@ Thumbs.db
 
 # Ignore private info about configuration
 config.sh
+build_deploy.sh
