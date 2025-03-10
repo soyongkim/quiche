@@ -127,6 +127,13 @@ void TlsConnection::DisableTicketSupport() {
   SSL_set_options(ssl(), SSL_OP_NO_TICKET);
 }
 
+// [SD] keylog file generation 
+static FILE *g_keylog_file = nullptr;
+static void KeyLogCallback(const SSL *ssl, const char*line) {
+  fprintf(g_keylog_file, "%s\n", line);
+  fflush(g_keylog_file);
+}
+
 // static
 bssl::UniquePtr<SSL_CTX> TlsConnection::CreateSslCtx() {
   CRYPTO_library_init();
@@ -135,6 +142,16 @@ bssl::UniquePtr<SSL_CTX> TlsConnection::CreateSslCtx() {
   SSL_CTX_set_max_proto_version(ssl_ctx.get(), TLS1_3_VERSION);
   SSL_CTX_set_quic_method(ssl_ctx.get(), &kSslQuicMethod);
   SSL_CTX_set_msg_callback(ssl_ctx.get(), &MessageCallback);
+
+  const char* keylog_file = getenv("SSLKEYLOGFILE");
+  if (keylog_file) {
+    g_keylog_file = fopen(keylog_file, "a");
+    if (g_keylog_file == nullptr) {
+      perror("fopen");
+    }
+    SSL_CTX_set_keylog_callback(ssl_ctx.get(), KeyLogCallback);
+  }
+
   return ssl_ctx;
 }
 
