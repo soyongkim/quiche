@@ -3,10 +3,10 @@ set -e
 set -o pipefail
 
 # For Deployment
-REMOTE_HOST=("130.104.229.63" "130.104.229.71")
+REMOTE_HOST=("0.0.0.0" "0.0.0.0")
 REMOTE_USER="root"
-REMOTE_PATH="/root/Workspace/quiche_binary"
-SSH_KEY_PATH="${HOME}/.ssh/soyong_ssh_key"
+REMOTE_PATH="/your/path/quiche_deployment"
+SSH_KEY_PATH="${HOME}/.ssh/your_private_key"
 
 # Validate that at least one remote host is configured
 if [ ${#REMOTE_HOST[@]} -eq 0 ]; then
