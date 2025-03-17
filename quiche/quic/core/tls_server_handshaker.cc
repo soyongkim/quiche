@@ -949,6 +949,13 @@ ssl_select_cert_result_t TlsServerHandshaker::EarlySelectCertCallback(
 
     if (use_alps_new_codepoint == 0) {
       QUIC_CODE_COUNT(quic_gfe_alps_use_old_codepoint);
+
+      // Record whether the client sets the old alps codepoint extension.
+      if (SSL_early_callback_ctx_extension_get(
+              client_hello, TLSEXT_TYPE_application_settings_old,
+              &unused_extension_bytes, &unused_extension_len)) {
+        QUIC_CODE_COUNT(quic_gfe_alps_old_codepoint_received);
+      }
     }
   }
 
@@ -1115,6 +1122,8 @@ void TlsServerHandshaker::OnSelectCertificateDone(
                 std::move(hints_config->configure_ssl));
             !status.ok()) {
           QUIC_CODE_COUNT(quic_tls_server_set_handshake_hints_failed);
+          QUIC_TRACESTRING(
+              absl::StrCat("ConfigureSSL failed: ", status.ToString()));
           QUIC_DVLOG(1) << "SSL_set_handshake_hints failed: " << status;
         }
         select_cert_status_ = QUIC_SUCCESS;

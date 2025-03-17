@@ -11,11 +11,13 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "absl/container/inlined_vector.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/variant.h"
 #include "quiche/quic/core/quic_data_writer.h"
 #include "quiche/quic/core/quic_time.h"
 #include "quiche/quic/moqt/moqt_messages.h"
@@ -265,14 +267,14 @@ uint64_t SignedVarintSerializedForm(int64_t value) {
 quiche::QuicheBuffer MoqtFramer::SerializeObjectHeader(
     const MoqtObject& message, MoqtDataStreamType message_type,
     bool is_first_in_stream) {
-  if (!ValidateObjectMetadata(message, message_type)) {
+  if (!ValidateObjectMetadata(message, /*is_datagram=*/false)) {
     QUIC_BUG(quic_bug_serialize_object_header_01)
         << "Object metadata is invalid";
     return quiche::QuicheBuffer();
   }
-  if (message_type == MoqtDataStreamType::kObjectDatagram) {
+  if (!message.subgroup_id.has_value()) {
     QUIC_BUG(quic_bug_serialize_object_header_02)
-        << "Datagrams use SerializeObjectDatagram()";
+        << "Subgroup ID is not set on data stream";
     return quiche::QuicheBuffer();
   }
   if (!is_first_in_stream) {
@@ -280,10 +282,14 @@ quiche::QuicheBuffer MoqtFramer::SerializeObjectHeader(
       case MoqtDataStreamType::kStreamHeaderSubgroup:
         return (message.payload_length == 0)
                    ? Serialize(WireVarInt62(message.object_id),
+                               WireStringWithVarInt62Length(
+                                   message.extension_headers),
                                WireVarInt62(message.payload_length),
                                WireVarInt62(static_cast<uint64_t>(
                                    message.object_status)))
                    : Serialize(WireVarInt62(message.object_id),
+                               WireStringWithVarInt62Length(
+                                   message.extension_headers),
                                WireVarInt62(message.payload_length));
       case MoqtDataStreamType::kStreamHeaderFetch:
         return (message.payload_length == 0)
@@ -291,6 +297,8 @@ quiche::QuicheBuffer MoqtFramer::SerializeObjectHeader(
                                WireVarInt62(*message.subgroup_id),
                                WireVarInt62(message.object_id),
                                WireUint8(message.publisher_priority),
+                               WireStringWithVarInt62Length(
+                                   message.extension_headers),
                                WireVarInt62(message.payload_length),
                                WireVarInt62(static_cast<uint64_t>(
                                    message.object_status)))
@@ -298,6 +306,8 @@ quiche::QuicheBuffer MoqtFramer::SerializeObjectHeader(
                                WireVarInt62(*message.subgroup_id),
                                WireVarInt62(message.object_id),
                                WireUint8(message.publisher_priority),
+                               WireStringWithVarInt62Length(
+                                   message.extension_headers),
                                WireVarInt62(message.payload_length));
       default:
         QUICHE_NOTREACHED();
@@ -307,38 +317,46 @@ quiche::QuicheBuffer MoqtFramer::SerializeObjectHeader(
   switch (message_type) {
     case MoqtDataStreamType::kStreamHeaderSubgroup:
       return (message.payload_length == 0)
-                 ? Serialize(WireVarInt62(message_type),
-                             WireVarInt62(message.track_alias),
-                             WireVarInt62(message.group_id),
-                             WireVarInt62(*message.subgroup_id),
-                             WireUint8(message.publisher_priority),
-                             WireVarInt62(message.object_id),
-                             WireVarInt62(message.payload_length),
-                             WireVarInt62(message.object_status))
-                 : Serialize(WireVarInt62(message_type),
-                             WireVarInt62(message.track_alias),
-                             WireVarInt62(message.group_id),
-                             WireVarInt62(*message.subgroup_id),
-                             WireUint8(message.publisher_priority),
-                             WireVarInt62(message.object_id),
-                             WireVarInt62(message.payload_length));
+                 ? Serialize(
+                       WireVarInt62(message_type),
+                       WireVarInt62(message.track_alias),
+                       WireVarInt62(message.group_id),
+                       WireVarInt62(*message.subgroup_id),
+                       WireUint8(message.publisher_priority),
+                       WireVarInt62(message.object_id),
+                       WireStringWithVarInt62Length(message.extension_headers),
+                       WireVarInt62(message.payload_length),
+                       WireVarInt62(message.object_status))
+                 : Serialize(
+                       WireVarInt62(message_type),
+                       WireVarInt62(message.track_alias),
+                       WireVarInt62(message.group_id),
+                       WireVarInt62(*message.subgroup_id),
+                       WireUint8(message.publisher_priority),
+                       WireVarInt62(message.object_id),
+                       WireStringWithVarInt62Length(message.extension_headers),
+                       WireVarInt62(message.payload_length));
     case MoqtDataStreamType::kStreamHeaderFetch:
       return (message.payload_length == 0)
-                 ? Serialize(WireVarInt62(message_type),
-                             WireVarInt62(message.track_alias),
-                             WireVarInt62(message.group_id),
-                             WireVarInt62(*message.subgroup_id),
-                             WireVarInt62(message.object_id),
-                             WireUint8(message.publisher_priority),
-                             WireVarInt62(message.payload_length),
-                             WireVarInt62(message.object_status))
-                 : Serialize(WireVarInt62(message_type),
-                             WireVarInt62(message.track_alias),
-                             WireVarInt62(message.group_id),
-                             WireVarInt62(*message.subgroup_id),
-                             WireVarInt62(message.object_id),
-                             WireUint8(message.publisher_priority),
-                             WireVarInt62(message.payload_length));
+                 ? Serialize(
+                       WireVarInt62(message_type),
+                       WireVarInt62(message.track_alias),
+                       WireVarInt62(message.group_id),
+                       WireVarInt62(*message.subgroup_id),
+                       WireVarInt62(message.object_id),
+                       WireUint8(message.publisher_priority),
+                       WireStringWithVarInt62Length(message.extension_headers),
+                       WireVarInt62(message.payload_length),
+                       WireVarInt62(message.object_status))
+                 : Serialize(
+                       WireVarInt62(message_type),
+                       WireVarInt62(message.track_alias),
+                       WireVarInt62(message.group_id),
+                       WireVarInt62(*message.subgroup_id),
+                       WireVarInt62(message.object_id),
+                       WireUint8(message.publisher_priority),
+                       WireStringWithVarInt62Length(message.extension_headers),
+                       WireVarInt62(message.payload_length));
     default:
       QUICHE_NOTREACHED();
       return quiche::QuicheBuffer();
@@ -347,7 +365,7 @@ quiche::QuicheBuffer MoqtFramer::SerializeObjectHeader(
 
 quiche::QuicheBuffer MoqtFramer::SerializeObjectDatagram(
     const MoqtObject& message, absl::string_view payload) {
-  if (!ValidateObjectMetadata(message, MoqtDataStreamType::kObjectDatagram)) {
+  if (!ValidateObjectMetadata(message, /*is_datagram=*/true)) {
     QUIC_BUG(quic_bug_serialize_object_datagram_01)
         << "Object metadata is invalid";
     return quiche::QuicheBuffer();
@@ -357,18 +375,19 @@ quiche::QuicheBuffer MoqtFramer::SerializeObjectDatagram(
         << "Payload length does not match payload";
     return quiche::QuicheBuffer();
   }
-  if (message.payload_length == 0) {
+  if (message.object_status != MoqtObjectStatus::kNormal) {
     return Serialize(
-        WireVarInt62(MoqtDataStreamType::kObjectDatagram),
+        WireVarInt62(MoqtDatagramType::kObjectStatus),
         WireVarInt62(message.track_alias), WireVarInt62(message.group_id),
         WireVarInt62(message.object_id), WireUint8(message.publisher_priority),
-        WireVarInt62(message.payload_length),
+        WireStringWithVarInt62Length(message.extension_headers),
         WireVarInt62(message.object_status));
   }
   return Serialize(
-      WireVarInt62(MoqtDataStreamType::kObjectDatagram),
+      WireVarInt62(MoqtDatagramType::kObject),
       WireVarInt62(message.track_alias), WireVarInt62(message.group_id),
       WireVarInt62(message.object_id), WireUint8(message.publisher_priority),
+      WireStringWithVarInt62Length(message.extension_headers),
       WireVarInt62(message.payload_length), WireBytes(payload));
 }
 
@@ -450,8 +469,6 @@ quiche::QuicheBuffer MoqtFramer::SerializeSubscribe(
           WireDeliveryOrder(message.group_order), WireVarInt62(filter_type),
           WireVarInt62(*message.start_group),
           WireVarInt62(*message.start_object), WireVarInt62(*message.end_group),
-          WireVarInt62(message.end_object.has_value() ? *message.end_object + 1
-                                                      : 0),
           WireSubscribeParameterList(message.parameters));
     default:
       QUICHE_BUG(MoqtFramer_end_group_missing) << "Subscribe framing error.";
@@ -498,18 +515,10 @@ quiche::QuicheBuffer MoqtFramer::SerializeUnsubscribe(
 
 quiche::QuicheBuffer MoqtFramer::SerializeSubscribeDone(
     const MoqtSubscribeDone& message) {
-  if (message.final_id.has_value()) {
-    return SerializeControlMessage(
-        MoqtMessageType::kSubscribeDone, WireVarInt62(message.subscribe_id),
-        WireVarInt62(message.status_code),
-        WireStringWithVarInt62Length(message.reason_phrase), WireUint8(1),
-        WireVarInt62(message.final_id->group),
-        WireVarInt62(message.final_id->object));
-  }
   return SerializeControlMessage(
       MoqtMessageType::kSubscribeDone, WireVarInt62(message.subscribe_id),
-      WireVarInt62(message.status_code),
-      WireStringWithVarInt62Length(message.reason_phrase), WireUint8(0));
+      WireVarInt62(message.status_code), WireVarInt62(message.stream_count),
+      WireStringWithVarInt62Length(message.reason_phrase));
 }
 
 quiche::QuicheBuffer MoqtFramer::SerializeSubscribeUpdate(
@@ -520,17 +529,10 @@ quiche::QuicheBuffer MoqtFramer::SerializeSubscribeUpdate(
   }
   uint64_t end_group =
       message.end_group.has_value() ? *message.end_group + 1 : 0;
-  uint64_t end_object =
-      message.end_object.has_value() ? *message.end_object + 1 : 0;
-  if (end_group == 0 && end_object != 0) {
-    QUICHE_BUG(MoqtFramer_invalid_subscribe_update) << "Invalid object range";
-    return quiche::QuicheBuffer();
-  }
   return SerializeControlMessage(
       MoqtMessageType::kSubscribeUpdate, WireVarInt62(message.subscribe_id),
       WireVarInt62(message.start_group), WireVarInt62(message.start_object),
-      WireVarInt62(end_group), WireVarInt62(end_object),
-      WireUint8(message.subscriber_priority),
+      WireVarInt62(end_group), WireUint8(message.subscriber_priority),
       WireSubscribeParameterList(message.parameters));
 }
 
@@ -637,18 +639,30 @@ quiche::QuicheBuffer MoqtFramer::SerializeMaxSubscribeId(
 }
 
 quiche::QuicheBuffer MoqtFramer::SerializeFetch(const MoqtFetch& message) {
-  if (message.end_group < message.start_object.group ||
-      (message.end_group == message.start_object.group &&
-       message.end_object.has_value() &&
-       *message.end_object < message.start_object.object)) {
+  if (!message.joining_fetch.has_value() &&
+      (message.end_group < message.start_object.group ||
+       (message.end_group == message.start_object.group &&
+        message.end_object.has_value() &&
+        *message.end_object < message.start_object.object))) {
     QUICHE_BUG(MoqtFramer_invalid_fetch) << "Invalid FETCH object range";
     return quiche::QuicheBuffer();
   }
+  if (message.joining_fetch.has_value()) {
+    return SerializeControlMessage(
+        MoqtMessageType::kFetch, WireVarInt62(message.fetch_id),
+        WireUint8(message.subscriber_priority),
+        WireDeliveryOrder(message.group_order),
+        WireVarInt62(FetchType::kJoining),
+        WireVarInt62(message.joining_fetch->joining_subscribe_id),
+        WireVarInt62(message.joining_fetch->preceding_group_offset),
+        WireSubscribeParameterList(message.parameters));
+  }
   return SerializeControlMessage(
-      MoqtMessageType::kFetch, WireVarInt62(message.subscribe_id),
-      WireFullTrackName(message.full_track_name, true),
+      MoqtMessageType::kFetch, WireVarInt62(message.fetch_id),
       WireUint8(message.subscriber_priority),
       WireDeliveryOrder(message.group_order),
+      WireVarInt62(FetchType::kStandalone),
+      WireFullTrackName(message.full_track_name, true),
       WireVarInt62(message.start_object.group),
       WireVarInt62(message.start_object.object),
       WireVarInt62(message.end_group),
@@ -697,14 +711,12 @@ quiche::QuicheBuffer MoqtFramer::SerializeObjectAck(
 
 // static
 bool MoqtFramer::ValidateObjectMetadata(const MoqtObject& object,
-                                        MoqtDataStreamType message_type) {
+                                        bool is_datagram) {
   if (object.object_status != MoqtObjectStatus::kNormal &&
       object.payload_length > 0) {
     return false;
   }
-  if ((message_type == MoqtDataStreamType::kStreamHeaderSubgroup ||
-       message_type == MoqtDataStreamType::kStreamHeaderFetch) !=
-      object.subgroup_id.has_value()) {
+  if (is_datagram == object.subgroup_id.has_value()) {
     return false;
   }
   return true;

@@ -14,6 +14,8 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "quiche/quic/core/quic_default_clock.h"
+#include "quiche/quic/core/quic_time.h"
 #include "quiche/quic/moqt/moqt_messages.h"
 #include "quiche/quic/moqt/moqt_priority.h"
 #include "quiche/quic/moqt/moqt_publisher.h"
@@ -23,6 +25,7 @@
 #include "quiche/common/platform/api/quiche_logging.h"
 #include "quiche/common/platform/api/quiche_test.h"
 #include "quiche/common/test_tools/quiche_test_utils.h"
+#include "quiche/web_transport/web_transport.h"
 
 namespace moqt {
 namespace {
@@ -67,6 +70,9 @@ class TestMoqtOutgoingQueue : public MoqtOutgoingQueue,
   }
 
   MOCK_METHOD(void, OnNewFinAvailable, (FullSequence sequence));
+  MOCK_METHOD(void, OnSubgroupAbandoned,
+              (FullSequence sequence,
+               webtransport::StreamErrorCode error_code));
   MOCK_METHOD(void, OnGroupAbandoned, (uint64_t group_id));
   MOCK_METHOD(void, CloseStreamForGroup, (uint64_t group_id), ());
   MOCK_METHOD(void, PublishObject,
@@ -74,6 +80,11 @@ class TestMoqtOutgoingQueue : public MoqtOutgoingQueue,
                absl::string_view payload),
               ());
   MOCK_METHOD(void, OnTrackPublisherGone, (), (override));
+  MOCK_METHOD(void, OnSubscribeAccepted, (), (override));
+  MOCK_METHOD(void, OnSubscribeRejected,
+              (MoqtSubscribeErrorReason reason,
+               std::optional<uint64_t> track_alias),
+              (override));
 };
 
 absl::StatusOr<std::vector<std::string>> FetchToVector(
@@ -347,6 +358,17 @@ TEST(MoqtOutgoingQueue, ObjectsGoneWhileFetching) {
 
   EXPECT_THAT(FetchToVector(std::move(deferred_fetch)),
               IsOkAndHolds(IsEmpty()));
+}
+
+TEST(MoqtOutgoingQueue, ObjectIsTimestamped) {
+  quic::QuicDefaultClock* clock = quic::QuicDefaultClock::Get();
+  quic::QuicTime test_start = clock->ApproximateNow();
+  TestMoqtOutgoingQueue queue;
+  queue.AddObject(MemSliceFromString("a"), true);
+  std::optional<PublishedObject> object =
+      queue.GetCachedObject(FullSequence{0, 0});
+  ASSERT_TRUE(object.has_value());
+  EXPECT_GE(object->arrival_time, test_start);
 }
 
 }  // namespace

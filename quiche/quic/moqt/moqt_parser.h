@@ -223,6 +223,8 @@ class QUICHE_EXPORT MoqtDataParser {
     kSubgroupId,
     kPublisherPriority,
     kObjectId,
+    kExtensionSize,
+    kExtensionBody,
     kObjectPayloadLength,
     kStatus,
     kData,
