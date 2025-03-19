@@ -1,16 +1,21 @@
 {
     "configurations": [
-        {
-            "name": "Linux",
-            "includePath": [
-                "${workspaceFolder}/**"
-            ],
-            "defines": [],
-            "compilerPath": "/usr/bin/clang",
-            "cStandard": "c17",
-            "cppStandard": "c++17",
-            "intelliSenseMode": "linux-clang-x64"
-        }
+      {
+        "name": "Linux",
+        "includePath": [
+          "${workspaceFolder}/**",
+          "${workspaceFolder}/bazel-out/**",
+          "${workspaceFolder}/bazel-quiche/external/**",
+          "${workspaceFolder}/bazel-quiche/external/boringssl*/include",
+          "/usr/include",
+          "/usr/local/include"
+        ],
+        "defines": [],
+        "compilerPath": "/usr/bin/gcc",
+        "cStandard": "c11",
+        "cppStandard": "c++17",
+        "intelliSenseMode": "linux-gcc-x64"
+      }
     ],
     "version": 4
-}
+  }
