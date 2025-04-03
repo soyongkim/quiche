@@ -502,6 +502,19 @@ cc_binary(
 )
 
 cc_binary(
+    name = "masque_server",
+    srcs = ["quic/masque/masque_client_bin.cc"],
+    deps = [
+        ":io_tool_support",
+        ":masque_support",
+        ":quiche_core",
+        ":quiche_tool_support",
+        "@boringssl//:crypto",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_binary(
     name = "masque_client",
     srcs = ["quic/masque/masque_client_bin.cc"],
     deps = [

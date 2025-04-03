@@ -239,7 +239,7 @@ class MasqueTlsTcpClientHandler : public ConnectingClientSocket::AsyncVisitor,
 
     if (current_socket_type_ == SocketType::KConnectSocket) {
       std::string response(data->data(), data->length());
-      std::cout << "[SD] Received CONNECT response: " << response << std::endl;
+      std::cout << "[SD] Received CONNECT response: " << response << " - "<< timeStamp() - start_time << "ms" << std::endl;
 
       if (response.find("200 Connection established") != std::string::npos) {
         std::cout << "[SD] Start TLS handshaking" << std::endl;
@@ -312,15 +312,15 @@ class MasqueTlsTcpClientHandler : public ConnectingClientSocket::AsyncVisitor,
     if (write_ret != static_cast<int>(data->length())) {
       QUICHE_LOG(ERROR) << "Short write from transport to TLS: " << write_ret
                         << " != " << data->length();
-                        std::cout << "Short write from transport to TLS: " << write_ret
+      std::cout << "Short write from transport to TLS: " << write_ret
                         << " != " << data->length() << std::endl;
       done_ = true;
       return;
     }
     QUICHE_DVLOG(1) << "Wrote " << data->length()
                     << " bytes from transport to TLS";
-                    std::cout << "Wrote " << data->length()
-                    << " bytes from transport to TLS" << std::endl;
+    std::cout << "[SD] Received " << data->length()
+                    << " bytes from transport to TLS - " << timeStamp() - start_time << "ms" << std::endl;
     if (h2_selected_) {
       h2_connection_->OnTransportReadable();
       connect_socket_->ReceiveAsync(kBioBufferSize);
@@ -411,6 +411,8 @@ class MasqueTlsTcpClientHandler : public ConnectingClientSocket::AsyncVisitor,
     std::cout << "Received h2 response headers: "
                      << headers.DebugString() << std::endl;
     done_ = true;
+    end_time = timeStamp();
+    std::cout << "[SD] Time elapsed: " << end_time - start_time << "ms" << std::endl;
   }
 
  private:
@@ -418,7 +420,7 @@ class MasqueTlsTcpClientHandler : public ConnectingClientSocket::AsyncVisitor,
     if (request_sent_ || done_ || !tls_connected_) {
       return;
     }
-    std::cout << "[SD] TLS connected" << std::endl; 
+    std::cout << "[SD] TLS connected - " << timeStamp() - start_time << "ms" << std::endl; 
     const uint8_t *alpn_data;
     unsigned alpn_len;
     SSL_get0_alpn_selected(ssl_.get(), &alpn_data, &alpn_len);
@@ -548,6 +550,8 @@ class MasqueTlsTcpClientHandler : public ConnectingClientSocket::AsyncVisitor,
     std::string connect_target = quiche::GetQuicheCommandLineFlag(FLAGS_connect_target);
     std::string connect_request = absl::StrCat("CONNECT ", connect_target, " HTTP/1.1\r\nHost: ", connect_target, "\r\n\r\n");
     std::cout << "[SD] Sending h1.1 CONNECT request to " << connect_target << std::endl;
+    
+    start_time = timeStamp();
     connect_socket_->SendAsync(connect_request);
 }
 
@@ -576,6 +580,13 @@ class MasqueTlsTcpClientHandler : public ConnectingClientSocket::AsyncVisitor,
     KConnectSocket
   };
   SocketType current_socket_type_ = SocketType::KConnectSocket;
+
+  uint64_t start_time;
+  uint64_t end_time;
+  uint64_t timeStamp() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+  }
+
 };
 
 int RunMasqueTcpClient(int argc, char *argv[]) {
