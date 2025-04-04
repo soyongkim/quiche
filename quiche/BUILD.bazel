@@ -569,6 +569,21 @@ cc_binary(
     ],
 )
 
+cc_binary(
+    name = "simple_h2_client",
+    srcs = ["quic/masque/simple_h2_client_bin.cc"],
+    deps = [
+        ":io_tool_support",
+        ":masque_support",
+        ":quiche_core",
+        ":quiche_tool_support",
+        ":binary_http",
+        ":oblivious_http",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+
 
 cc_binary(
     name = "web_transport_test_server",

@@ -1,1 +1,1 @@
-./bazel-bin/quiche/proxy_tcp_client https://smalldragon.net:4433 --v=1 --disable_certificate_verification=true --connect_target=www.google.com:443
+./bazel-bin/quiche/proxy_tcp_client https://localhost:4433 --v=1 --disable_certificate_verification=true --connect_target=www.google.com:443

@@ -236,6 +236,9 @@ class MasqueTlsTcpClientHandler : public ConnectingClientSocket::AsyncVisitor,
       return;
     }
     QUICHE_DVLOG(1) << "Transport received " << data->length() << " bytes";
+    std::cout << "[SD] Received Data from transport: " << data->length() << " bytes - " << timeStamp() - last_http2_read_time << "ms" << std::endl;
+    last_http2_read_time = timeStamp();
+
 
     if (current_socket_type_ == SocketType::KConnectSocket) {
       std::string response(data->data(), data->length());
@@ -319,8 +322,8 @@ class MasqueTlsTcpClientHandler : public ConnectingClientSocket::AsyncVisitor,
     }
     QUICHE_DVLOG(1) << "Wrote " << data->length()
                     << " bytes from transport to TLS";
-    std::cout << "[SD] Received " << data->length()
-                    << " bytes from transport to TLS - " << timeStamp() - start_time << "ms" << std::endl;
+    // std::cout << "[SD] Received " << data->length()
+    //                 << " bytes from transport to TLS - " << timeStamp() - start_time << "ms" << std::endl;
     if (h2_selected_) {
       h2_connection_->OnTransportReadable();
       connect_socket_->ReceiveAsync(kBioBufferSize);
@@ -413,6 +416,7 @@ class MasqueTlsTcpClientHandler : public ConnectingClientSocket::AsyncVisitor,
     done_ = true;
     end_time = timeStamp();
     std::cout << "[SD] Time elapsed: " << end_time - start_time << "ms" << std::endl;
+    socket_->Disconnect();
   }
 
  private:
@@ -551,7 +555,7 @@ class MasqueTlsTcpClientHandler : public ConnectingClientSocket::AsyncVisitor,
     std::string connect_request = absl::StrCat("CONNECT ", connect_target, " HTTP/1.1\r\nHost: ", connect_target, "\r\n\r\n");
     std::cout << "[SD] Sending h1.1 CONNECT request to " << connect_target << std::endl;
     
-    start_time = timeStamp();
+    start_time = last_http2_read_time = timeStamp();
     connect_socket_->SendAsync(connect_request);
 }
 
@@ -582,6 +586,7 @@ class MasqueTlsTcpClientHandler : public ConnectingClientSocket::AsyncVisitor,
   SocketType current_socket_type_ = SocketType::KConnectSocket;
 
   uint64_t start_time;
+  uint64_t last_http2_read_time;
   uint64_t end_time;
   uint64_t timeStamp() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
