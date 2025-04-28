@@ -373,6 +373,10 @@ class QUICHE_EXPORT QuicSession
                         QuicStreamOffset offset,
                         TransmissionType type) override;
 
+
+  void OnHeadersFrameReceived();
+
+
   // Called by the QuicCryptoStream when a handshake message is sent.
   virtual void OnCryptoHandshakeMessageSent(
       const CryptoHandshakeMessage& message);

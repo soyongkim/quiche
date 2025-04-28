@@ -2925,6 +2925,14 @@ void QuicSession::ProcessAllPendingStreams() {
   }
 }
 
+// Migrate the path after receiving a headers frame.
+void QuicSession::OnHeadersFrameReceived() {
+  std::cout << "[SD] OnHeadersFrameReceived" << std::endl;
+  
+  // Okay, Try tomorrow!
+}
+
+
 void QuicSession::ValidatePath(
     std::unique_ptr<QuicPathValidationContext> context,
     std::unique_ptr<QuicPathValidator::ResultDelegate> result_delegate,

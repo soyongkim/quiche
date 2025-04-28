@@ -1,21 +1,22 @@
 {
     "configurations": [
-      {
-        "name": "Linux",
-        "includePath": [
-          "${workspaceFolder}/**",
-          "${workspaceFolder}/bazel-out/**",
-          "${workspaceFolder}/bazel-quiche/external/**",
-          "${workspaceFolder}/bazel-quiche/external/boringssl*/include",
-          "/usr/include",
-          "/usr/local/include"
-        ],
-        "defines": [],
-        "compilerPath": "/usr/bin/gcc",
-        "cStandard": "c11",
-        "cppStandard": "c++17",
-        "intelliSenseMode": "linux-gcc-x64"
-      }
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/bazel-out/**",
+                "${workspaceFolder}/bazel-quiche/external/**",
+                "${workspaceFolder}/bazel-quiche/external/boringssl*/include",
+                "/usr/include",
+                "/usr/local/include",
+                "/home/ubuntu/.cache/bazel/_bazel_ubuntu/f59060bb64d3c7359df56527eda79ee8/execroot/_main/bazel-out/k8-fastbuild/bin"
+            ],
+            "defines": [],
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "linux-gcc-x64"
+        }
     ],
     "version": 4
-  }
+}
