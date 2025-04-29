@@ -203,6 +203,9 @@ DEFINE_QUICHE_COMMAND_LINE_FLAG(
 DEFINE_QUICHE_COMMAND_LINE_FLAG(std::string, interface_name, "",
                                 "Interface name to bind QUIC UDP sockets to.");
 
+DEFINE_QUICHE_COMMAND_LINE_FLAG(std::string, alt_interface_name, "",
+                                  "Alternative interface name to bind QUIC UDP sockets to for migration.");
+
 DEFINE_QUICHE_COMMAND_LINE_FLAG(
     std::string, signing_algorithms_pref, "",
     "A textual specification of a set of signature algorithms that can be "
@@ -391,6 +394,12 @@ int QuicToyClient::SendRequestsAndPrintResponses(
   if (!interface_name.empty()) {
     client->set_interface_name(interface_name);
   }
+  const std::string alt_interface_name = 
+      quiche::GetQuicheCommandLineFlag(FLAGS_alt_interface_name);
+  if (!alt_interface_name.empty()) { 
+    client->set_alt_interface_name(alt_interface_name);
+  }
+
   const std::string signing_algorithms_pref =
       quiche::GetQuicheCommandLineFlag(FLAGS_signing_algorithms_pref);
   if (!signing_algorithms_pref.empty()) {

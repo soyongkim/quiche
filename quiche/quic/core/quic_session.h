@@ -61,6 +61,14 @@ namespace test {
 class QuicSessionPeer;
 }  // namespace test
 
+class QUIC_EXPORT_PRIVATE QuicClientBaseVisitorInterface {
+  public:
+    virtual ~QuicClientBaseVisitorInterface() {}
+
+    // Called when the connection migration is needed.
+    virtual void OnConnectionMigrationNeeded() = 0;
+};
+
 class QUICHE_EXPORT QuicSession
     : public QuicConnectionVisitorInterface,
       public SessionNotifierInterface,
@@ -127,6 +135,18 @@ class QUICHE_EXPORT QuicSession
   QuicSession& operator=(const QuicSession&) = delete;
 
   ~QuicSession() override;
+
+  // [SD] for Connection migration test
+  void set_client_base_visitor(
+    QuicClientBaseVisitorInterface* client_base_visitor) {
+      client_base_visitor_ = client_base_visitor;
+  }
+
+  void OnConnectionMigrationNeeded() {
+  if (client_base_visitor_) {
+      client_base_visitor_->OnConnectionMigrationNeeded();
+    }
+  }
 
   virtual void Initialize();
 
@@ -908,6 +928,7 @@ class QUICHE_EXPORT QuicSession
     max_streams_accepted_per_loop_ = max_streams_accepted_per_loop;
   }
 
+
  private:
   friend class test::QuicSessionPeer;
 
@@ -1016,6 +1037,9 @@ class QUICHE_EXPORT QuicSession
 
   // May be null.
   Visitor* visitor_;
+  
+  // [SD] ClinetBase Visitor for Connection migration test
+  QuicClientBaseVisitorInterface* client_base_visitor_;
 
   // A list of streams which need to write more data.  Stream register
   // themselves in their constructor, and unregisterm themselves in their

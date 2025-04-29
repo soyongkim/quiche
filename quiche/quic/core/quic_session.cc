@@ -120,6 +120,7 @@ QuicSession::QuicSession(
     : connection_(connection),
       perspective_(connection->perspective()),
       visitor_(owner),
+      client_base_visitor_(nullptr),
       write_blocked_streams_(CreateWriteBlockedList(priority_type)),
       config_(config),
       stream_id_manager_(perspective(), connection->transport_version(),
@@ -2929,7 +2930,8 @@ void QuicSession::ProcessAllPendingStreams() {
 void QuicSession::OnHeadersFrameReceived() {
   std::cout << "[SD] OnHeadersFrameReceived" << std::endl;
   
-  // Okay, Try tomorrow!
+  
+
 }
 
 

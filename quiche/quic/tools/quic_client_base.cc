@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <memory>
 #include <utility>
+#include <ifaddrs.h>
+
 
 #include "quiche/quic/core/crypto/quic_random.h"
 #include "quiche/quic/core/http/spdy_utils.h"
@@ -137,6 +139,34 @@ QuicClientBase::QuicClientBase(
 
 QuicClientBase::~QuicClientBase() = default;
 
+QuicIpAddress IterfaceToAddress(std::string iface) {
+  struct ifaddrs *ifap, *ifa;
+  struct sockaddr_in *sa;
+  QuicIpAddress ip = QuicIpAddress::Any4();
+
+  getifaddrs(&ifap);
+  for(ifa = ifap; ifa; ifa = ifa->ifa_next) {
+    if(ifa->ifa_addr && ifa->ifa_addr->sa_family == AF_INET) {
+      if(strcmp(ifa->ifa_name, iface.c_str()) == 0) {
+        sa = (struct sockaddr_in *) ifa->ifa_addr;
+        ip = QuicIpAddress(sa->sin_addr);
+        break;
+      }
+    }
+  }
+  freeifaddrs(ifap);
+  return ip;
+}
+
+void QuicClientBase::OnConnectionMigrationNeeded() {
+  // Try connection migration to the althernative address.
+  if(alt_interface_name_ != "") {
+    std::cout << "[SD] Connection migration to alternative address: " << alt_interface_name_ << std::endl;
+    MigrateSocket(IterfaceToAddress(alt_interface_name_));    
+  }
+}
+
+
 bool QuicClientBase::Initialize() {
   num_sent_client_hellos_ = 0;
   connection_error_ = QUIC_NO_ERROR;
@@ -154,6 +184,10 @@ bool QuicClientBase::Initialize() {
       kDefaultFlowControlSendWindow) {
     config()->SetInitialSessionFlowControlWindowToSend(
         kSessionMaxRecvWindowSize);
+  }
+
+  if (interface_name_ != "") {
+    bind_to_address_ = IterfaceToAddress(interface_name_);
   }
 
   if (!network_helper_->CreateUDPSocketAndBind(server_address_,
@@ -229,6 +263,11 @@ void QuicClientBase::StartConnect() {
   if (initial_max_packet_length_ != 0) {
     session()->connection()->SetMaxPacketLength(initial_max_packet_length_);
   }
+
+  // [SD] for connection migration
+  session()->set_client_base_visitor(this);
+
+
   // Reset |writer()| after |session()| so that the old writer outlives the old
   // session.
   set_writer(writer);

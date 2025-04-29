@@ -52,7 +52,8 @@ class QUIC_EXPORT_PRIVATE PathMigrationContext
 // Subclasses derived from this class are responsible for creating the
 // actual QuicSession instance, as well as defining functions that
 // create and run the underlying network transport.
-class QuicClientBase : public QuicSession::Visitor {
+class QuicClientBase : public QuicSession::Visitor
+                     , public QuicClientBaseVisitorInterface {
  public:
   // An interface to various network events that the QuicClient will need to
   // interact with.
@@ -93,6 +94,9 @@ class QuicClientBase : public QuicSession::Visitor {
 
   virtual ~QuicClientBase();
 
+  // [SD] for Connection migration test
+  void OnConnectionMigrationNeeded() override;
+  
   // Implmenets QuicSession::Visitor
   void OnConnectionClosed(QuicConnectionId /*server_connection_id*/,
                           QuicErrorCode /*error*/,
@@ -304,7 +308,13 @@ class QuicClientBase : public QuicSession::Visitor {
     interface_name_ = interface_name;
   }
 
+  void set_alt_interface_name(std::string alt_interface_name) {
+    alt_interface_name_ = alt_interface_name;
+  }
+
   std::string interface_name() const { return interface_name_; }
+
+  std::string alt_interface_name() const { return alt_interface_name_; }
 
   void set_server_connection_id_override(
       const QuicConnectionId& connection_id) {
@@ -492,6 +502,7 @@ class QuicClientBase : public QuicSession::Visitor {
   // Stores the interface name to bind. If empty, will not attempt to bind the
   // socket to that interface. Defaults to empty string.
   std::string interface_name_;
+  std::string alt_interface_name_;
 
   DeterministicConnectionIdGenerator connection_id_generator_{
       kQuicDefaultConnectionIdLength};
