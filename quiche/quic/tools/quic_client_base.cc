@@ -161,8 +161,9 @@ QuicIpAddress IterfaceToAddress(std::string iface) {
 void QuicClientBase::OnConnectionMigrationNeeded() {
   // Try connection migration to the althernative address.
   if(alt_interface_name_ != "") {
-    std::cout << "[SD] Connection migration to alternative address: " << alt_interface_name_ << std::endl;
-    MigrateSocket(IterfaceToAddress(alt_interface_name_));    
+    std::cout << "[SD] Connection migration to alternative address: " << IterfaceToAddress(alt_interface_name_).ToString() << " : " << alt_interface_name_ << std::endl;
+    MigrateSocket(IterfaceToAddress(alt_interface_name_));
+    //ValidateAndMigrateSocket(IterfaceToAddress(alt_interface_name_));
   }
 }
 
@@ -188,6 +189,7 @@ bool QuicClientBase::Initialize() {
 
   if (interface_name_ != "") {
     bind_to_address_ = IterfaceToAddress(interface_name_);
+    std::cout << "[SD] Connection Estalibshed : " << bind_to_address_.ToString() << " : " << interface_name_ << std::endl;
   }
 
   if (!network_helper_->CreateUDPSocketAndBind(server_address_,

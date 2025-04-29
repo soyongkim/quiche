@@ -965,11 +965,11 @@ ssl_select_cert_result_t TlsServerHandshaker::EarlySelectCertCallback(
   if (hostname) {
     crypto_negotiated_params_->sni =
         QuicHostnameUtils::NormalizeHostname(hostname);
-    if (!ValidateHostname(hostname)) {
-      CloseConnection(QUIC_HANDSHAKE_FAILED_INVALID_HOSTNAME,
-                      "invalid hostname");
-      return ssl_select_cert_error;
-    }
+    // if (!ValidateHostname(hostname)) {
+    //   CloseConnection(QUIC_HANDSHAKE_FAILED_INVALID_HOSTNAME,
+    //                   "invalid hostname");
+    //   return ssl_select_cert_error;
+    // }
     if (hostname != crypto_negotiated_params_->sni) {
       QUIC_CODE_COUNT(quic_tls_server_hostname_diff);
       QUIC_LOG_EVERY_N_SEC(WARNING, 300)

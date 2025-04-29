@@ -2,11 +2,11 @@
 # config.sh: Migraiton configuration file
 
 # QUIC server
-SERVER_HOST="www.google.com"
-SERVER_PORT="443"
+SERVER_HOST="smalldragon.net"
+SERVER_PORT="6121"
 
 # main path
-MAIN_IF="eth0"
+MAIN_IF="wlan0"
 
 # alt path
-ALT_IF="wlan0"
+ALT_IF=""

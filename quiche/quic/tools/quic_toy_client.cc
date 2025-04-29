@@ -448,6 +448,18 @@ int QuicToyClient::SendRequestsAndPrintResponses(
   header_block[":authority"] = url.HostPort();
   header_block[":path"] = url.PathParamsQuery();
 
+  // [SD] Pretend real browser
+  header_block["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+  header_block["accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8";
+  //header_block["accept-language"] = "en-US,en;q=0.9";
+  header_block["accept-encoding"] = "gzip, deflate, br";
+  header_block["upgrade-insecure-requests"] = "1";
+  header_block["sec-fetch-site"] = "none";
+  header_block["sec-fetch-mode"] = "navigate";
+  header_block["sec-fetch-user"] = "?1";
+  header_block["sec-fetch-dest"] = "document";
+
+
   // Append any additional headers supplied on the command line.
   const std::string headers = quiche::GetQuicheCommandLineFlag(FLAGS_headers);
   for (absl::string_view sp : absl::StrSplit(headers, ';')) {
@@ -488,8 +500,8 @@ int QuicToyClient::SendRequestsAndPrintResponses(
       }
 
       std::cout << "Response:" << std::endl;
-      // std::cout << "headers: " << client->latest_response_headers()
-      //           << std::endl;
+      std::cout << "headers: " << client->latest_response_headers()
+                << std::endl;
       // std::string response_body = client->latest_response_body();
       // if (!quiche::GetQuicheCommandLineFlag(FLAGS_body_hex).empty()) {
       //   // Assume response is binary data.
@@ -503,7 +515,7 @@ int QuicToyClient::SendRequestsAndPrintResponses(
       // std::cout << "early data accepted: " << client->EarlyDataAccepted()
       //           << std::endl;
 
-      std::cout << "-- skip --" << std::endl;
+      //std::cout << "-- skip --" << std::endl;
       QUIC_LOG(INFO) << "Request completed with TTFB(us): "
                      << client->latest_ttfb().ToMicroseconds() << ", TTLB(us): "
                      << client->latest_ttlb().ToMicroseconds();

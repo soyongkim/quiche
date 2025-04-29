@@ -2929,9 +2929,7 @@ void QuicSession::ProcessAllPendingStreams() {
 // Migrate the path after receiving a headers frame.
 void QuicSession::OnHeadersFrameReceived() {
   std::cout << "[SD] OnHeadersFrameReceived" << std::endl;
-  
-  
-
+  client_base_visitor_->OnConnectionMigrationNeeded();
 }
 
 

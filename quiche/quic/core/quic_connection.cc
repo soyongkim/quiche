@@ -1086,6 +1086,9 @@ void QuicConnection::OnSuccessfulMigration(bool is_port_change) {
   if (version().HasIetfQuicFrames() && !is_port_change) {
     sent_packet_manager_.OnConnectionMigration(/*reset_send_algorithm=*/true);
   }
+
+  std::cout << "[SD] Migration Completed" << std::endl;
+  SendPingAtLevel(encryption_level_);
 }
 
 void QuicConnection::OnTransportParametersSent(
@@ -5526,12 +5529,14 @@ void QuicConnection::OnConnectionMigration() {
           now - stats_.handshake_completion_time);
     }
   }
+
   visitor_->OnConnectionMigration(active_effective_peer_migration_type_);
   if (active_effective_peer_migration_type_ != PORT_CHANGE &&
       active_effective_peer_migration_type_ != IPV4_SUBNET_CHANGE &&
       !framer_.version().HasIetfQuicFrames()) {
     sent_packet_manager_.OnConnectionMigration(/*reset_send_algorithm=*/false);
   }
+
 }
 
 bool QuicConnection::IsCurrentPacketConnectivityProbing() const {
@@ -6998,7 +7003,8 @@ bool QuicConnection::MigratePath(const QuicSocketAddress& self_address,
       if (owns_writer) {
         delete writer;
       }
-      return false;
+      // std::cout << "[SD] check 2" << std::endl;
+      // return false;
     }
     if (packet_creator_.GetServerConnectionId().length() !=
         default_path_.server_connection_id.length()) {
