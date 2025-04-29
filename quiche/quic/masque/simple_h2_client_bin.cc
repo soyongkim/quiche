@@ -223,7 +223,7 @@ class SimpleHttp2Client : public ConnectingClientSocket::AsyncVisitor,
 
 int RunSimpleHttp2Client(int argc, char* argv[]) {
   if (argc != 2) {
-    std::cerr << "Usage: http2_curl_like_client <url>" << std::endl;
+    std::cerr << "Usage: simple_h2_client <url>" << std::endl;
     return 1;
   }
   QuicUrl url(argv[1]);
