@@ -66,7 +66,7 @@ class QUIC_EXPORT_PRIVATE QuicClientBaseVisitorInterface {
     virtual ~QuicClientBaseVisitorInterface() {}
 
     // Called when the connection migration is needed.
-    virtual void OnConnectionMigrationNeeded() = 0;
+    virtual void OnRequestedConnectionMigration() = 0;
 };
 
 class QUICHE_EXPORT QuicSession
@@ -142,12 +142,6 @@ class QUICHE_EXPORT QuicSession
       client_base_visitor_ = client_base_visitor;
   }
 
-  void OnConnectionMigrationNeeded() {
-  if (client_base_visitor_) {
-      client_base_visitor_->OnConnectionMigrationNeeded();
-    }
-  }
-
   virtual void Initialize();
 
   // Return the reserved crypto stream as a constant pointer.
@@ -175,6 +169,10 @@ class QUICHE_EXPORT QuicSession
   void OnCanWrite() override;
   void OnCongestionWindowChange(QuicTime /*now*/) override {}
   void OnConnectionMigration(AddressChangeType /*type*/) override {}
+
+  // [SD] For testing only
+  void OnConnectionMigrationNeeded() override;
+
   // Adds a connection level WINDOW_UPDATE frame.
   void OnAckNeedsRetransmittableFrame() override;
   void SendAckFrequency(const QuicAckFrequencyFrame& frame) override;
@@ -392,10 +390,6 @@ class QUICHE_EXPORT QuicSession
   size_t SendCryptoData(EncryptionLevel level, size_t write_length,
                         QuicStreamOffset offset,
                         TransmissionType type) override;
-
-
-  void OnHeadersFrameReceived();
-
 
   // Called by the QuicCryptoStream when a handshake message is sent.
   virtual void OnCryptoHandshakeMessageSent(

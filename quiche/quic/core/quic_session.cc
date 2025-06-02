@@ -184,6 +184,8 @@ void QuicSession::Initialize() {
              connection_->version().HasIetfQuicFrames()) {
     config_.SetMinAckDelayDraft10Ms(kDefaultMinAckDelayTimeMs);
   }
+
+
   connection_->SetFromConfig(config_);
   if (perspective() == Perspective::IS_SERVER &&
       connection_->version().handshake_protocol == PROTOCOL_TLS1_3) {
@@ -197,6 +199,8 @@ void QuicSession::Initialize() {
   if (perspective() == Perspective::IS_SERVER) {
     connection_->OnSuccessfulVersionNegotiation();
   }
+
+  std::cout << "[quic_session] transport_version: " << transport_version() << std::endl;
 
   if (QuicVersionUsesCryptoFrames(transport_version())) {
     return;
@@ -1987,6 +1991,8 @@ bool QuicSession::FillTransportParameters(TransportParameters* params) {
           connection_->GetOriginalDestinationConnectionId());
       config_.SetInitialSourceConnectionIdToSend(connection_->connection_id());
     } else {
+      std::cout << "[quic_session] client connection id: "
+                << connection_->client_connection_id() << std::endl;
       config_.SetInitialSourceConnectionIdToSend(
           connection_->client_connection_id());
     }
@@ -2360,6 +2366,12 @@ void QuicSession::OnAckNeedsRetransmittableFrame() {
 
 void QuicSession::SendAckFrequency(const QuicAckFrequencyFrame& frame) {
   control_frame_manager_.WriteOrBufferAckFrequency(frame);
+}
+
+void QuicSession::OnConnectionMigrationNeeded() {
+  if (client_base_visitor_) {
+      client_base_visitor_->OnRequestedConnectionMigration();
+  }
 }
 
 void QuicSession::SendNewConnectionId(const QuicNewConnectionIdFrame& frame) {
@@ -2925,13 +2937,6 @@ void QuicSession::ProcessAllPendingStreams() {
     }
   }
 }
-
-// Migrate the path after receiving a headers frame.
-void QuicSession::OnHeadersFrameReceived() {
-  std::cout << "[SD] OnHeadersFrameReceived" << std::endl;
-  client_base_visitor_->OnConnectionMigrationNeeded();
-}
-
 
 void QuicSession::ValidatePath(
     std::unique_ptr<QuicPathValidationContext> context,

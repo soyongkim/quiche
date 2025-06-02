@@ -158,12 +158,35 @@ QuicIpAddress IterfaceToAddress(std::string iface) {
   return ip;
 }
 
-void QuicClientBase::OnConnectionMigrationNeeded() {
+void QuicClientBase::OnTestConnectionMigration() {
+  MigrateSocketWithSpecifiedPort(IterfaceToAddress(interface_name_), 49999);
+}
+
+int count = 0;
+void QuicClientBase::OnRequestedConnectionMigration() {
   // Try connection migration to the althernative address.
   if(alt_interface_name_ != "") {
     std::cout << "[SD] Connection migration to alternative address: " << IterfaceToAddress(alt_interface_name_).ToString() << " : " << alt_interface_name_ << std::endl;
-    MigrateSocket(IterfaceToAddress(alt_interface_name_));
+    //MigrateSocket(IterfaceToAddress(alt_interface_name_));
     //ValidateAndMigrateSocket(IterfaceToAddress(alt_interface_name_));
+
+
+    // Port change type. it's working if the connection id is same. it means the server can receive the packet.
+    MigrateSocketWithSpecifiedPort(IterfaceToAddress(interface_name_), 50000);
+
+    // it's not wokring even though the server can receive the packet.
+    //MigrateSocketWithSpecifiedPort(IterfaceToAddress(alt_interface_name_), 50000);
+
+    // if(count == 0) {
+    //  // MigrateSocketWithSpecifiedPort(IterfaceToAddress(interface_name_), 50000);
+    //   MigrateSocket(IterfaceToAddress(alt_interface_name_));
+
+    //   count++;
+    // } else {
+    //   //MigrateSocket(IterfaceToAddress(alt_interface_name_));
+    //   MigrateSocketWithSpecifiedPort(IterfaceToAddress(interface_name_), 50000);
+    // }
+
   }
 }
 
@@ -188,8 +211,7 @@ bool QuicClientBase::Initialize() {
   }
 
   if (interface_name_ != "") {
-    bind_to_address_ = IterfaceToAddress(interface_name_);
-    std::cout << "[SD] Connection Estalibshed : " << bind_to_address_.ToString() << " : " << interface_name_ << std::endl;
+    bind_to_address_ = IterfaceToAddress(interface_name_);  
   }
 
   if (!network_helper_->CreateUDPSocketAndBind(server_address_,
@@ -208,6 +230,7 @@ bool QuicClientBase::Connect() {
   while (!connected() &&
          num_attempts <= QuicCryptoClientStream::kMaxClientHellos) {
     StartConnect();
+    //std::cout << "[SD] Client Connect Attempt : " << num_attempts << std::endl;
     while (EncryptionBeingEstablished()) {
       WaitForEvents();
     }
@@ -223,6 +246,7 @@ bool QuicClientBase::Connect() {
     QUIC_BUG(quic_bug_10906_1) << "Missing session after Connect";
     return false;
   }
+  //std::cout << "[SD] Connection Estalibshed : " << bind_to_address_.ToString() << " : " << interface_name_ << std::endl;
   return session()->connection()->connected();
 }
 
@@ -248,6 +272,8 @@ void QuicClientBase::StartConnect() {
       can_reconnect_with_different_version
           ? ParsedQuicVersionVector{mutual_version}
           : supported_versions();
+
+  std::cout << "[quic_client_base] Client Supported Version : " << client_supported_versions << std::endl;
 
   session_ = CreateQuicClientSession(
       client_supported_versions,
@@ -345,7 +371,9 @@ bool QuicClientBase::MigrateSocketWithSpecifiedPort(
     return false;
   }
 
-  network_helper_->CleanUpAllUDPSockets();
+  // keep the port.
+  //network_helper_->CleanUpAllUDPSockets();
+
   std::unique_ptr<QuicPacketWriter> writer =
       CreateWriterForNewNetwork(new_host, port);
   if (writer == nullptr) {
@@ -353,6 +381,11 @@ bool QuicClientBase::MigrateSocketWithSpecifiedPort(
         << "MigrateSocketWithSpecifiedPort failed from writer creation";
     return false;
   }
+
+  std::cout << "[quic_client_base] GetlatestClientAddress : " << network_helper_->GetLatestClientAddress().ToString() <<
+      " | peer_address: " << session()->connection()->peer_address().ToString() << 
+      " | new host: " << new_host.ToString() << std::endl;
+
   if (!session()->MigratePath(network_helper_->GetLatestClientAddress(),
                               session()->connection()->peer_address(),
                               writer.get(), false)) {
@@ -360,6 +393,7 @@ bool QuicClientBase::MigrateSocketWithSpecifiedPort(
         << "MigrateSocketWithSpecifiedPort failed from session()->MigratePath";
     return false;
   }
+
   set_writer(writer.release());
   return true;
 }
@@ -370,6 +404,9 @@ bool QuicClientBase::ValidateAndMigrateSocket(const QuicIpAddress& new_host) {
   if (!connected()) {
     return false;
   }
+
+  // [SD] Test for just sending Path Challenge
+  network_helper_->CleanUpAllUDPSockets();
 
   std::unique_ptr<QuicPacketWriter> writer =
       CreateWriterForNewNetwork(new_host, local_port_);
@@ -458,6 +495,10 @@ bool QuicClientBase::WaitForHandshakeConfirmed() {
 
   // If the handshake fails due to a timeout, the connection will be closed.
   QUIC_LOG_IF(ERROR, !connected()) << "Handshake with server failed.";
+
+
+  // [SD] Testing
+  //OnRequestedConnectionMigration();
   return connected();
 }
 

@@ -252,14 +252,18 @@ bool TlsClientHandshaker::SetAlpn() {
 bool TlsClientHandshaker::SetTransportParameters() {
   TransportParameters params;
   params.perspective = Perspective::IS_CLIENT;
+
   params.legacy_version_information =
       TransportParameters::LegacyVersionInformation();
   params.legacy_version_information->version =
       CreateQuicVersionLabel(session()->supported_versions().front());
+
+      
   params.version_information = TransportParameters::VersionInformation();
   const QuicVersionLabel version = CreateQuicVersionLabel(session()->version());
   params.version_information->chosen_version = version;
   params.version_information->other_versions.push_back(version);
+
 
   if (!handshaker_delegate()->FillTransportParameters(&params)) {
     return false;

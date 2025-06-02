@@ -430,7 +430,7 @@ int QuicToyClient::SendRequestsAndPrintResponses(
     std::cout << ", resolved IP " << client->server_address().host().ToString();
   }
   std::cout << std::endl;
-
+  
   // Construct the string body from flags, if provided.
   std::string body = quiche::GetQuicheCommandLineFlag(FLAGS_body);
   if (!quiche::GetQuicheCommandLineFlag(FLAGS_body_hex).empty()) {
@@ -477,10 +477,13 @@ int QuicToyClient::SendRequestsAndPrintResponses(
   // Make sure to store the response, for later output.
   client->set_store_response(true);
 
+  // [SD] Test
+  client->WaitForHandshakeConfirmed();
+
+  
   for (int i = 0; i < num_requests; ++i) {
     // Send the request.
     client->SendRequestAndWaitForResponse(header_block, body, /*fin=*/true);
-
     // Print request and response details.
     if (!quiche::GetQuicheCommandLineFlag(FLAGS_quiet)) {
       std::cout << "Request:" << std::endl;

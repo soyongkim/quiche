@@ -560,6 +560,8 @@ class QUICHE_EXPORT QuicConfig {
   // Called to clear google_handshake_message to send or received.
   void ClearGoogleHandshakeMessage();
 
+  void PrintTransportParameters() const;
+
  private:
   friend class test::QuicConfigPeer;
 

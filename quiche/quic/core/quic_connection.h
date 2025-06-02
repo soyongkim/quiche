@@ -161,6 +161,9 @@ class QUICHE_EXPORT QuicConnectionVisitorInterface {
   // Called when the connection receives a packet from a migrated client.
   virtual void OnConnectionMigration(AddressChangeType type) = 0;
 
+  // [SD] Called when the connection needs to migrate to a new address.
+  virtual void OnConnectionMigrationNeeded() = 0;
+
   // Called when the peer seems unreachable over the current path.
   virtual void OnPathDegrading() = 0;
 
@@ -242,7 +245,7 @@ class QUICHE_EXPORT QuicConnectionVisitorInterface {
 
   // Called when connection is being closed right before a CONNECTION_CLOSE
   // frame is serialized, but only on the server and only if forward secure
-  // encryption has already been established.
+  // encryption has already been established.OnConnectionMigration
   virtual void BeforeConnectionCloseSent() = 0;
 
   // Called by the server to validate |token| in received INITIAL packets.
@@ -2505,6 +2508,9 @@ class QUICHE_EXPORT QuicConnection
 
   // Indicate whether AckFrequency frame has been sent.
   bool ack_frequency_sent_ = false;
+
+  // Indicate Migration trying has been triggered.
+  bool migration_trying_triggered_ = false;
 
   // True if a 0-RTT decrypter was or is installed at some point in the
   // connection's lifetime.

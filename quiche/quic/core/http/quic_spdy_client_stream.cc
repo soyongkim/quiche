@@ -130,15 +130,16 @@ void QuicSpdyClientStream::OnInitialHeadersComplete(
       continue;
     }
 
+    std::cout << "[quic_spdy_client_stream] OnHeadersFrameReceived" << std::endl;
     if (name == ":status") {
-      std::cout << "[SD] Headers " << name << " " << pair.second << std::endl;
+      std::cout << "[quic_spdy_client_stream] Headers " << name << " " << pair.second << std::endl;
       break;
     }
     //std::cout << "[SD] Header: " << name << ": " << pair.second << std::endl;
   }
 
   // If the headers frame received, call the session to notify it for connection migration
-  session()->OnHeadersFrameReceived();
+  session()->OnConnectionMigrationNeeded();
 }
 
 void QuicSpdyClientStream::OnTrailingHeadersComplete(

@@ -95,7 +95,9 @@ class QuicClientBase : public QuicSession::Visitor
   virtual ~QuicClientBase();
 
   // [SD] for Connection migration test
-  void OnConnectionMigrationNeeded() override;
+  void OnRequestedConnectionMigration() override;
+
+  void OnTestConnectionMigration();
   
   // Implmenets QuicSession::Visitor
   void OnConnectionClosed(QuicConnectionId /*server_connection_id*/,

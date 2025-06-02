@@ -49,7 +49,8 @@ QUICHE_FLAG(bool, quiche_reloadable_flag_quic_optimize_qpack_blocking_manager, f
 QUICHE_FLAG(bool, quiche_reloadable_flag_quic_pacing_remove_non_initial_burst, false, false, "If true, remove the non-initial burst in QUIC PacingSender.")
 QUICHE_FLAG(bool, quiche_reloadable_flag_quic_parse_cert_compression_algos_from_chlo, true, true, "If true, parse offered cert compression algorithms from received CHLOs.")
 QUICHE_FLAG(bool, quiche_reloadable_flag_quic_priority_respect_incremental, false, false, "If true, respect the incremental parameter of each stream in QuicWriteBlockedList.")
-QUICHE_FLAG(bool, quiche_reloadable_flag_quic_receive_ack_frequency, false, false, "When true, advertises support for ACK_FREQUENCY and IMMEDIATE_ACK from draft-ietf-quic-ack-frequency-10 and processes them correctly.")
+// [SD] Test ack_frequency Default false, false
+QUICHE_FLAG(bool, quiche_reloadable_flag_quic_receive_ack_frequency, true, true, "When true, advertises support for ACK_FREQUENCY and IMMEDIATE_ACK from draft-ietf-quic-ack-frequency-10 and processes them correctly.")
 QUICHE_FLAG(bool, quiche_reloadable_flag_quic_record_tos_byte, false, false, "If true, record TOS byte at QuicPacketReader.")
 QUICHE_FLAG(bool, quiche_reloadable_flag_quic_require_handshake_confirmation, true, true, "If true, require handshake confirmation for QUIC connections, functionally disabling 0-rtt handshakes.")
 QUICHE_FLAG(bool, quiche_reloadable_flag_quic_test_peer_addr_change_after_normalize, false, false, "If true, QuicConnection::ProcessValidatedPacket will use normalized address to test peer address changes.")

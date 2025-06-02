@@ -818,7 +818,9 @@ bool SerializeTransportParameters(const TransportParameters& in,
       kIntegerParameterLength +           // max_datagram_frame_size
       kTypeAndValueLength +               // reliable_stream_reset
       kIntegerParameterLength +           // initial_round_trip_time_us
-      kTypeAndValueLength +               // discard
+      kTypeAndValueLength +              // discard
+
+
       kTypeAndValueLength +               // google_handshake_message
       kTypeAndValueLength +               // google_connection_options
       kTypeAndValueLength;                // google-version

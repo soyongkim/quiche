@@ -245,7 +245,10 @@ QuicConnection::QuicConnection(
                          ? kDefaultServerMaxPacketSize
                          : kDefaultMaxPacketSize);
   uber_received_packet_manager_.set_max_ack_ranges(255);
+
+  // [SD] Test multiple packet number spaces off
   MaybeEnableMultiplePacketNumberSpacesSupport();
+
   QUICHE_DCHECK(perspective_ == Perspective::IS_CLIENT ||
                 supported_versions.size() == 1);
   InstallInitialCrypters(default_path_.server_connection_id);
@@ -1088,7 +1091,8 @@ void QuicConnection::OnSuccessfulMigration(bool is_port_change) {
   }
 
   std::cout << "[SD] Migration Completed" << std::endl;
-  SendPingAtLevel(encryption_level_);
+  //SendPingAtLevel(encryption_level_);
+  //SendAllPendingAcks();
 }
 
 void QuicConnection::OnTransportParametersSent(
@@ -1409,6 +1413,13 @@ bool QuicConnection::OnCryptoFrame(const QuicCryptoFrame& frame) {
   }
   MaybeUpdateAckTimeout();
   visitor_->OnCryptoFrame(frame);
+
+
+  // if (version().HasIetfQuicFrames() &&
+  //     self_issued_cid_manager_ != nullptr) {
+  //   self_issued_cid_manager_->MaybeSendNewConnectionIds();
+  // }
+
   return connected_;
 }
 
@@ -2480,6 +2491,8 @@ size_t QuicConnection::SendCryptoData(EncryptionLevel level,
     QUIC_BUG(quic_bug_10511_18) << "Attempt to send empty crypto frame";
     return 0;
   }
+  std::cout << "[quic_connection] SendCryptoData: " << write_length
+            << " bytes of crypto data" << std::endl;
   ScopedPacketFlusher flusher(this);
   return packet_creator_.ConsumeCryptoData(level, write_length, offset);
 }
@@ -3245,6 +3258,19 @@ void QuicConnection::MaybeBundleOpportunistically(
     auto frame = sent_packet_manager_.GetUpdatedAckFrequencyFrame();
     visitor_->SendAckFrequency(frame);
   }
+
+
+  // [SD] Counting packets for connection migration is only needed when
+  const bool counting_packets_for_connection_migration = 
+      !migration_trying_triggered_ && transmission_type == NOT_RETRANSMISSION &&
+      packet_creator_.NextSendingPacketNumber() >=
+          FirstSendingPacketNumber() + 15;
+
+  if(counting_packets_for_connection_migration) {
+    migration_trying_triggered_ = true;
+    //visitor_->OnConnectionMigrationNeeded();
+  }
+
 
   if (transmission_type == NOT_RETRANSMISSION) {
     visitor_->MaybeBundleOpportunistically();
@@ -6835,7 +6861,7 @@ void QuicConnection::ValidatePath(
     }
     alternative_path_ = PathState(context->self_address(),
                                   context->peer_address(), client_connection_id,
-                                  server_connection_id, stateless_reset_token);
+                                  default_path_.server_connection_id, stateless_reset_token);
   }
   if (multi_port_stats_ != nullptr &&
       reason == PathValidationReason::kMultiPort) {
@@ -6995,24 +7021,31 @@ bool QuicConnection::MigratePath(const QuicSocketAddress& self_address,
     }
     return false;
   }
+
+  std::cout << "[quic_connection] quiche_dcheck " << !version().UsesHttp3() << " " << IsHandshakeConfirmed() << " " << accelerated_server_preferred_address_ << std::endl;
+
+
   QUICHE_DCHECK(!version().UsesHttp3() || IsHandshakeConfirmed() ||
                 accelerated_server_preferred_address_);
 
-  if (version().UsesHttp3()) {
-    if (!UpdateConnectionIdsOnMigration(self_address, peer_address)) {
-      if (owns_writer) {
-        delete writer;
-      }
-      // std::cout << "[SD] check 2" << std::endl;
-      // return false;
-    }
-    if (packet_creator_.GetServerConnectionId().length() !=
-        default_path_.server_connection_id.length()) {
-      packet_creator_.FlushCurrentPacket();
-    }
-    packet_creator_.SetClientConnectionId(default_path_.client_connection_id);
-    packet_creator_.SetServerConnectionId(default_path_.server_connection_id);
-  }
+  // [SD] Keep the original connection id for the default path. Okay, even though the port only changed, 
+  // if the connecion id chagned, the google can't receive it
+  // if (version().UsesHttp3()) {
+  //   if (!UpdateConnectionIdsOnMigration(self_address, peer_address)) {
+  //     if (owns_writer) {
+  //       delete writer;
+  //     }
+  //     std::cout << "[SD] Using HTTP3 and Failed to update connection ids on migration. why only facebook failed?" << std::endl;
+  //     return false;
+  //   }
+  //   if (packet_creator_.GetServerConnectionId().length() !=
+  //       default_path_.server_connection_id.length()) {
+  //     packet_creator_.FlushCurrentPacket();
+  //   }
+
+  //   packet_creator_.SetClientConnectionId(default_path_.client_connection_id);
+  //   packet_creator_.SetServerConnectionId(default_path_.server_connection_id);
+  // }
 
   const auto self_address_change_type = QuicUtils::DetermineAddressChangeType(
       default_path_.self_address, self_address);
