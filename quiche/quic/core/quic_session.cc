@@ -2007,6 +2007,11 @@ QuicErrorCode QuicSession::ProcessTransportParameters(
                                             error_details);
 }
 
+bool QuicSession::IsDisableConnectionMigration() {
+  return config_.DisableConnectionMigration();
+}
+
+
 void QuicSession::OnHandshakeCallbackDone() {
   if (!connection_->connected()) {
     return;

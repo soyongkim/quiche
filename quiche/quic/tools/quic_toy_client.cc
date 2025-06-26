@@ -49,6 +49,10 @@
 #include <utility>
 #include <vector>
 
+// recording
+#include <fstream>
+#include <sys/stat.h>
+
 #include "absl/strings/escaping.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
@@ -214,6 +218,100 @@ DEFINE_QUICHE_COMMAND_LINE_FLAG(
 namespace quic {
 namespace {
 
+
+// -----------------------------------------------------------------------------
+// Returns a non-empty reason string if the response looks geo-/region-blocked.
+// Empty string  =>  no evidence of geo-restriction.
+// -----------------------------------------------------------------------------
+std::string GetGeoRestrictionReason(int http_status,
+                                    const std::string& raw_headers,
+                                    const std::string& body) {
+  auto to_lower = [](const std::string& s) {
+    std::string out(s.size(), '\0');
+    std::transform(s.begin(), s.end(), out.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    return out;
+  };
+  const std::string h = to_lower(raw_headers);
+  const std::string b = to_lower(body);
+
+  // ── 1. explicit codes ────────────────────────────────────────────────────
+  if (http_status == 451)
+    return "HTTP 451 – Unavailable for Legal/Geo Reasons";
+
+  if (b.find("error 1009") != std::string::npos &&
+      b.find("country")    != std::string::npos)
+    return "Cloudflare Error 1009 (country/region banned)";
+
+  // ── 2. header hints ──────────────────────────────────────────────────────
+  for (std::string key :
+       {"x-geo-block", "x-geo-restriction", "blocked-by", "country-denied"}) {
+    if (h.find(key) != std::string::npos)
+      return "Header \"" + key + "\" indicates geo-block";
+  }
+
+  // ── 3. high-confidence phrases ───────────────────────────────────────────
+  for (std::string phrase : {
+           "not available in your country", "not available in your region",
+           "only works in", "only available in",
+           "not supported in your region", "due to rights issues",
+           "due to licensing restrictions",
+           "sorry, disney+ is not available",
+           "hulu isn",  // "Hulu isn't available in your location"
+           "you seem to be using an unblocker or proxy"}) {
+    if (b.find(phrase) != std::string::npos)
+      return "Phrase \"" + phrase + "\" found in body";
+  }
+
+  // ── 4. softer heuristic: need ≥2 hits + suspicious status ────────────────
+  if (http_status == 403 || http_status == 302 || http_status == 301) {
+    int hits = 0;
+    for (std::string soft : {"not available", "unavailable", "access denied",
+                             "geo", "region", "country", "vpn", "outside"}) {
+      if (b.find(soft) != std::string::npos) ++hits;
+    }
+    if (hits >= 2)
+      return "Multiple geo keywords with HTTP " + std::to_string(http_status);
+  }
+
+  return {};  // no evidence
+}
+
+// Record a log entry in CSV format.
+void AppendCsvLog(const std::string& log_filename,
+                  const std::string& host,
+                  const std::string& server_ip,
+                  bool migration_disabled,
+                  bool restriction_detected,
+                  const std::string& reason,
+                  size_t response_size,
+                  int64_t ttlb_ms) {
+  // Check if file exists and is empty
+  struct stat st;
+  bool write_header = (stat(log_filename.c_str(), &st) != 0) || (st.st_size == 0);
+
+  std::ofstream log_file(log_filename, std::ios::app);
+  if (log_file.is_open()) {
+    if (write_header) {
+      log_file << "host,server_ip,disable_conn_migration,restriction_detected,reason,response_size,ttlb_ms\n";
+    }
+    std::string escaped_reason = reason;
+    size_t pos = 0;
+    while ((pos = escaped_reason.find('"', pos)) != std::string::npos) {
+      escaped_reason.insert(pos, 1, '"');
+      pos += 2;
+    }
+    log_file << '"' << host << "\","
+             << '"' << server_ip << "\","
+             << (migration_disabled ? "1" : "0") << ","
+             << (restriction_detected ? "1" : "0") << ","
+             << '"' << escaped_reason << "\","
+             << response_size << ","
+             << ttlb_ms
+             << "\n";
+  }
+}
+
 // Creates a ClientProofSource which only contains a default client certificate.
 // Return nullptr for failure.
 std::unique_ptr<ClientProofSource> CreateTestClientProofSource(
@@ -260,7 +358,8 @@ int QuicToyClient::SendRequestsAndPrintResponses(
     host = url.host();
   }
   int port = quiche::GetQuicheCommandLineFlag(FLAGS_port);
-  if (port == 0) {
+  if (port == 0) 
+  {
     port = url.port();
   }
 
@@ -425,7 +524,8 @@ int QuicToyClient::SendRequestsAndPrintResponses(
     return 1;
   }
 
-  std::cout << "Connected to " << host << ":" << port;
+  std::cout << "Connected to " << host << "("<< client->server_address().host() << ":" << port << 
+   ") - Disable connection migration: " << client->session()->IsDisableConnectionMigration();
   if (quiche::GetQuicheCommandLineFlag(FLAGS_output_resolved_server_address)) {
     std::cout << ", resolved IP " << client->server_address().host().ToString();
   }
@@ -451,8 +551,9 @@ int QuicToyClient::SendRequestsAndPrintResponses(
   // [SD] Pretend real browser
   header_block["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
   header_block["accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8";
-  //header_block["accept-language"] = "en-US,en;q=0.9";
-  header_block["accept-encoding"] = "gzip, deflate, br";
+  // header_block["accept-language"] = "en-US,en;q=0.9";
+  // header_block["accept-encoding"] = "gzip, deflate, br";
+  header_block["accept-encoding"] = "identity";
   header_block["upgrade-insecure-requests"] = "1";
   header_block["sec-fetch-site"] = "none";
   header_block["sec-fetch-mode"] = "navigate";
@@ -505,7 +606,7 @@ int QuicToyClient::SendRequestsAndPrintResponses(
       std::cout << "Response:" << std::endl;
       std::cout << "headers: " << client->latest_response_headers()
                 << std::endl;
-      // std::string response_body = client->latest_response_body();
+      std::string response_body = client->latest_response_body();
       // if (!quiche::GetQuicheCommandLineFlag(FLAGS_body_hex).empty()) {
       //   // Assume response is binary data.
       //   std::cout << "body:\n"
@@ -518,10 +619,41 @@ int QuicToyClient::SendRequestsAndPrintResponses(
       // std::cout << "early data accepted: " << client->EarlyDataAccepted()
       //           << std::endl;
 
+      // if(ContainsGeoRestrictionKeywords(response_body)) {
+      //   std::cout << "Response body contains geo-restriction keywords." << std::endl;
+      // } else {
+      //   std::cout << "Nope" << std::endl;
+      // }
+
+      std::string reason = GetGeoRestrictionReason(
+          client->latest_response_code(), client->latest_response_headers(), response_body);
+      if (!reason.empty()) {
+        std::cout << "Geo-restriction detected: " << reason << "\n";
+      } else {
+        std::cout << "No geo-restriction detected.\n";
+      }
+
+      AppendCsvLog("quic_client_log.csv", host,
+                   client->server_address().host().ToString(),
+                   client->session()->IsDisableConnectionMigration(),
+                   !reason.empty(), reason, response_body.size(),
+                   client->latest_ttlb().ToMilliseconds());
+
+      std::cout << "total received bytes: " << response_body.size() << std::endl;
+
+      //std::cout << "-- skip --" << std::endl;
+      std::cout << "Request completed with TTFB(ms): "
+                     << client->latest_ttfb().ToMilliseconds() << ", TTLB(ms): "
+                     << client->latest_ttlb().ToMilliseconds() << '\n';
+    
+
+
       //std::cout << "-- skip --" << std::endl;
       QUIC_LOG(INFO) << "Request completed with TTFB(us): "
                      << client->latest_ttfb().ToMicroseconds() << ", TTLB(us): "
                      << client->latest_ttlb().ToMicroseconds();
+
+      
     }
 
     if (!client->connected()) {

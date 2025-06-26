@@ -1429,9 +1429,8 @@ QuicErrorCode QuicConfig::ProcessTransportParameters(
   }
 
   if (params.disable_active_migration) {
-
-  std::cout << "[quic_config] Set connection migration disabled: "
-            << params.disable_active_migration << std::endl;
+    std::cout << "[quic_config] Set connection migration disabled: "
+              << params.disable_active_migration << std::endl;
     connection_migration_disabled_.SetReceivedValue(1u);
   }
 

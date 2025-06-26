@@ -10,7 +10,13 @@
 # SERVER_HOST="www.youtube.com"
 
 # SERVER_HOST="www.linkedin.com"
-SERVER_HOST="cloudflare-quic.com"
+# SERVER_HOST="cloudflare-quic.com"
+
+# SERVER_HOST="thepiratebay.se"
+
+# SERVER_HOST="www.coupangplay.com"
+
+SERVER_HOST="tubitv.com"
 
 # SERVER_HOST="speed.cloudflare.com"
 

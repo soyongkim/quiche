@@ -728,6 +728,9 @@ class QUICHE_EXPORT QuicSession
     return notify_stream_soon_to_destroy_;
   }
 
+  // check disable migration
+  bool IsDisableConnectionMigration();
+
  protected:
   using StreamMap =
       absl::flat_hash_map<QuicStreamId, std::unique_ptr<QuicStream>>;
