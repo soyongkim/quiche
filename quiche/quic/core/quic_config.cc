@@ -1572,15 +1572,7 @@ void QuicConfig::PrintTransportParameters() const {
             << GetMaxUnidirectionalStreamsToSend() << std::endl;
   std::cout << "  Max Ack Delay (ms): " << GetMaxAckDelayToSendMs() << std::endl;
 
-  if (min_ack_delay_ms_.HasSendValue()) {
-    std::cout << "  Min Ack Delay (ms): " << min_ack_delay_ms_.GetSendValue()
-              << std::endl;
-  }
-
-  if (min_ack_delay_ms_draft10_.HasSendValue()) {
-    std::cout << "  Min Ack Delay Draft10 (ms): "
-              << min_ack_delay_ms_draft10_.GetSendValue() << std::endl;
-  }
+  // Min ack delay debug output removed - member variable doesn't exist in upstream
 
   std::cout << "  Ack Delay Exponent: " << GetAckDelayExponentToSend()
             << std::endl;

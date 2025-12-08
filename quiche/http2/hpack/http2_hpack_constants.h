@@ -10,6 +10,7 @@
 // See the spec for details:
 // https://http2.github.io/http2-spec/compression.html#rfc.section.6
 
+#include <cstdint>
 #include <ostream>
 #include <string>
 

@@ -320,8 +320,8 @@ class QUICHE_EXPORT QuicSession
   void OnCongestionWindowChange(QuicTime /*now*/) override {}
   void OnConnectionMigration(AddressChangeType /*type*/) override {}
 
-  // [SD] For testing only
-  void OnConnectionMigrationNeeded() override;
+  // [SD] Custom method for connection migration testing - not an override
+  void OnConnectionMigrationNeeded();
 
   // Adds a connection level WINDOW_UPDATE frame.
   void OnAckNeedsRetransmittableFrame() override;

@@ -1,7 +1,12 @@
 # Automatically detect host platform to pick config
 common --enable_platform_specific_config
 
+# Use Clang as the compiler
+build --action_env=CC=clang-18
+build --action_env=CXX=clang++-18
+
 build --cxxopt=-std=c++20
+build --host_cxxopt=-std=c++20
 build --cxxopt=-fno-rtti
 build --cxxopt=-Wno-nullability-completeness
 build --cxxopt=-Wno-deprecated-declarations

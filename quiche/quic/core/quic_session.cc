@@ -197,7 +197,6 @@ QuicSession::QuicSession(
       currently_writing_stream_id_(0),
       num_outgoing_draining_streams_(0),
       closed_streams_clean_up_alarm_(nullptr),
-      visitor_(owner),
       stream_count_reset_alarm_(
           absl::WrapUnique<QuicAlarm>(connection->alarm_factory()->CreateAlarm(
               new StreamCountResetAlarmDelegate(this)))),
@@ -2063,7 +2062,7 @@ QuicErrorCode QuicSession::ProcessTransportParameters(
 }
 
 bool QuicSession::IsDisableConnectionMigration() {
-  return config_.DisableConnectionMigration();
+  return config()->DisableConnectionMigration();
 }
 
 

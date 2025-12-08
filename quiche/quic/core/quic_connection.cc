@@ -3252,18 +3252,9 @@ void QuicConnection::MaybeBundleOpportunistically(
     visitor_->SendAckFrequency(frame);
   }
 
-
-  // [SD] Counting packets for connection migration is only needed when
-  const bool counting_packets_for_connection_migration = 
-      !migration_trying_triggered_ && transmission_type == NOT_RETRANSMISSION &&
-      packet_creator_.NextSendingPacketNumber() >=
-          FirstSendingPacketNumber() + 15;
-
-  if(counting_packets_for_connection_migration) {
-    migration_trying_triggered_ = true;
-    //visitor_->OnConnectionMigrationNeeded();
-  }
-
+  // [SD] Connection migration trigger code removed - member variable doesn't exist in upstream
+  // This experimental code was for triggering migration after 15 packets
+  // TODO: Re-implement using proper upstream migration API if needed
 
   if (transmission_type == NOT_RETRANSMISSION) {
     visitor_->MaybeBundleOpportunistically();
