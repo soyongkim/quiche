@@ -48,6 +48,10 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <regex>
+#include <map>
+#include <algorithm>
+#include <iomanip>
 
 // recording
 #include <fstream>
@@ -218,6 +222,216 @@ DEFINE_QUICHE_COMMAND_LINE_FLAG(
 namespace quic {
 namespace {
 
+// Language detection structure
+struct LanguageScore {
+  double total = 0.0;
+  double unicode = 0.0;
+  double words = 0.0;
+  double phrases = 0.0;
+  int unicode_matches = 0;
+  int word_matches = 0;
+  int phrase_matches = 0;
+};
+
+struct LanguageDetectionResult {
+  std::string primary_language = "Unknown";
+  std::string confidence = "Low";
+  double score = 0.0;
+  std::string reason;
+  std::string declared_language = "none";
+  size_t text_length = 0;
+  std::map<std::string, LanguageScore> all_scores;
+};
+
+// Extract HTML lang attribute and detect languages in response body
+LanguageDetectionResult DetectLanguages(const std::string& response_headers, const std::string& response_body) {
+  LanguageDetectionResult result;
+  
+  // Convert to lowercase for case-insensitive matching
+  auto to_lower = [](const std::string& s) {
+    std::string out(s.size(), '\0');
+    std::transform(s.begin(), s.end(), out.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    return out;
+  };
+  
+  std::string body_lower = to_lower(response_body);
+  std::string headers_lower = to_lower(response_headers);
+  
+  // Extract HTML lang attribute
+  std::regex html_lang_regex(R"(<html[^>]+lang\s*=\s*[\"']([^\"']+)[\"'])", std::regex_constants::icase);
+  std::smatch html_match;
+  if (std::regex_search(response_body, html_match, html_lang_regex)) {
+    result.declared_language = html_match[1].str();
+  }
+  
+  // Extract meta Content-Language
+  std::regex meta_lang_regex(R"(<meta[^>]+http-equiv\s*=\s*[\"']content-language[\"'][^>]+content\s*=\s*[\"']([^\"']+)[\"'])", std::regex_constants::icase);
+  std::smatch meta_match;
+  if (result.declared_language == "none" && std::regex_search(response_body, meta_match, meta_lang_regex)) {
+    result.declared_language = meta_match[1].str();
+  }
+  
+  result.text_length = response_body.length();
+  
+  if (result.text_length < 50) {
+    result.confidence = "Low";
+    result.reason = "Insufficient text content";
+    return result;
+  }
+  
+  // Language patterns with Iranian languages (using simple string matching instead of regex ranges)
+  struct LanguagePattern {
+    std::vector<std::string> common_words;
+    std::vector<std::string> phrases; 
+    std::vector<std::string> indicators;
+  };
+  
+  std::map<std::string, LanguagePattern> language_patterns = {
+    {"English", {
+      {"the", "and", "for", "are", "but", "not", "you", "all", "can", "had", "her", "was", "one", "our", "out", "day", "get", "has", "him", "his", "how", "its", "may", "new", "now", "old", "see", "two", "way", "who", "boy", "did", "man", "men", "put", "say", "she", "too", "use"},
+      {"about", "after", "again", "against", "before", "being", "below", "between", "during", "further", "having", "other", "since", "through", "under", "until", "while", "would", "could", "should"},
+      {"english", "language", "content", "website"}
+    }},
+    {"Spanish", {
+      {"que", "con", "una", "por", "para", "más", "como", "pero", "sus", "hasta", "desde", "cuando", "muy", "sin", "sobre", "también", "me", "se", "le", "da", "su", "un", "el", "en", "es", "no", "te", "lo", "mi", "tu", "él", "yo", "ha", "he", "si", "ya", "ti"},
+      {"porque", "después", "entonces", "mientras", "durante", "aunque", "todavía", "siempre", "ningún", "algún"},
+      {"español", "castellano", "idioma", "página"}
+    }},
+    {"French", {
+      {"que", "les", "des", "est", "son", "une", "sur", "avec", "tout", "ses", "était", "être", "avoir", "lui", "dans", "ce", "il", "le", "de", "à", "un", "pour", "pas", "vous", "par", "sont", "sa", "cette", "au", "ne", "et", "en", "du", "elle", "la", "mais", "ou", "si", "nous", "on", "me", "te"},
+      {"parce", "après", "pendant", "depuis", "jusqu", "avant", "toujours", "jamais", "beaucoup", "encore"},
+      {"français", "langue", "contenu", "site"}
+    }},
+    {"German", {
+      {"der", "die", "und", "in", "den", "von", "zu", "das", "mit", "sich", "des", "auf", "für", "ist", "im", "dem", "nicht", "ein", "eine", "als", "auch", "es", "an", "werden", "aus", "er", "hat", "dass", "sie", "nach", "wird", "bei", "einer", "um", "am", "sind", "noch", "wie", "einem", "über", "einen", "so", "zum", "war", "haben", "nur", "oder", "aber", "vor", "zur", "bis", "unter", "kann", "du", "sein", "wenn", "ich"},
+      {"weil", "obwohl", "während", "nachdem", "bevor", "falls", "damit", "sodass"},
+      {"deutsch", "sprache", "inhalt", "webseite"}
+    }},
+    {"Persian", {
+      {"که", "این", "آن", "را", "به", "از", "در", "با", "یا", "تا", "اگر", "چون", "برای", "روی", "زیر", "کنار", "بین", "پیش", "پس", "بعد", "قبل", "حال", "هنوز", "همیشه", "هیچ", "کسی", "چیزی", "جایی", "وقتی", "چرا", "چگونه", "کجا"},
+      {"چونکه", "بنابراین", "اما", "ولی", "اگرچه", "درحالیکه", "پیش از آن", "پس از آن"},
+      {"فارسی", "پارسی", "ایران", "تهران", "اصفهان", "شیراز", "مشهد", "تبریز", "کرمان", "اهواز", "رشت", "قم", "کرج", "ارومیه"}
+    }},
+    {"Dari", {
+      {"که", "این", "آن", "را", "به", "از", "در", "با", "یا", "تا", "اگر", "چون", "برای", "روی", "زیر", "کنار", "بین", "پیش", "پس", "بعد", "قبل", "حال", "هنوز", "همیشه", "هیچ", "کسی", "چیزی", "جایی", "وقتی", "چرا", "چگونه", "کجا"},
+      {"چونکه", "بنابراین", "اما", "ولی", "اگرچه", "درحالیکه", "پیش از آن", "پس از آن"},
+      {"دری", "افغانستان", "کابل", "هرات", "مزار", "قندهار", "جلال‌آباد", "غزنی", "بامیان"}
+    }},
+    {"Kurdish", {
+      {"کە", "ئەم", "ئەو", "لە", "بۆ", "لەگەڵ", "یان", "تا", "ئەگەر", "چونکە", "بەهۆی", "سەر", "ژێر", "تەنیشت", "نێوان", "پێش", "پاش", "ئێستا", "هەمیشە", "هیچ", "کەس", "شت", "شوێن", "کاتێک", "بۆچی", "چۆن", "کوێ"},
+      {"چونکە", "بۆیە", "بەڵام", "هەرچەندە", "لەکاتێکدا", "پێش ئەوەی", "پاش ئەوەی"},
+      {"کوردی", "کوردستان", "هەولێر", "سلێمانی", "دهۆک", "کەرکووک", "زاخۆ", "قامشلی"}
+    }},
+    {"Pashto", {
+      {"چې", "دا", "هغه", "ته", "له", "په", "سره", "یا", "تر", "که", "ځکه", "د", "پر", "لاندې", "ترڅنګ", "ترمنځ", "مخکې", "وروسته", "اوس", "تل", "هیڅ", "څوک", "ډېر", "ځای", "کله", "ولې", "څنګه", "چېرته"},
+      {"ځکه چې", "نو", "مګر", "که څه هم", "پداسې حال کې چې", "دمخه", "وروسته"},
+      {"پښتو", "افغانستان", "کابل", "قندهار", "هرات", "جلالاباد", "مزارشريف", "لښکرګاه", "پېښور", "کراچۍ"}
+    }},
+    {"Balochi", {
+      {"کہ", "ای", "آ", "تئی", "گوں", "تہ", "یا", "تا", "اگاں", "چو", "واستہ", "بالا", "نیچ", "پاس", "مانز", "دیم", "پس", "ایشان", "ہمیشگی", "ہیچ", "کسے", "چیزے", "جاگہ", "کدے", "چے", "چون", "کجا"},
+      {"چونکہ", "ایں واستہ", "لیکن", "اگرچی", "ایں وہد کہ", "ایں شئے", "ایں پس"},
+      {"بلوچی", "بلوچستان", "کویٹہ", "زاہدان", "چابہار", "گوادر", "خاش", "سراوان", "قصر"}
+    }},
+    {"Arabic", {
+      {"أن", "التي", "الذي", "في", "من", "إلى", "على", "هذا", "هذه", "ذلك", "تلك", "كان", "كانت", "ليس", "ليست", "أنه", "أنها", "الذين", "اللاتي", "والذي", "وإن", "كل", "بعد", "قبل", "عند", "عندما", "حين", "حيث", "كيف", "لماذا", "ماذا", "متى"},
+      {"لأن", "ولكن", "ومع", "إذا", "عندما", "بينما", "حتى", "أو", "لكن"},
+      {"العربية", "عربي", "لغة", "محتوى", "موقع"}
+    }},
+    {"Russian", {
+      {"что", "это", "как", "так", "все", "она", "эта", "тот", "они", "мой", "наш", "для", "его", "при", "был", "том", "два", "где", "там", "чем", "них", "быть", "есть", "оно", "мне", "нас", "вас", "их", "себя", "тебя", "меня", "нами", "вами", "ними", "мной", "тобой", "собой"},
+      {"потому", "после", "тогда", "пока", "хотя", "всегда", "никогда", "много", "ещё"},
+      {"русский", "язык", "содержание", "сайт"}
+    }},
+    {"Chinese", {
+      {"的", "了", "是", "在", "有", "我", "他", "这", "个", "们", "你", "来", "不", "到", "一", "上", "也", "为", "就", "学", "生", "会", "可", "以", "要", "对", "没", "说", "她", "好", "都", "和", "很", "给", "用", "过", "因", "请", "让", "从", "想"},
+      {"因为", "所以", "但是", "然后", "如果", "虽然", "然而", "或者", "而且", "不过"},
+      {"中文", "汉语", "语言", "内容", "网站"}
+    }}
+  };
+  
+  // Calculate scores for each language
+  for (const auto& [language, pattern] : language_patterns) {
+    LanguageScore& score = result.all_scores[language];
+    
+    // Count common words
+    for (const std::string& word : pattern.common_words) {
+      std::string word_lower = to_lower(word);
+      size_t pos = 0;
+      while ((pos = body_lower.find(word_lower, pos)) != std::string::npos) {
+        score.word_matches++;
+        pos += word_lower.length();
+      }
+    }
+    
+    // Count phrases
+    for (const std::string& phrase : pattern.phrases) {
+      std::string phrase_lower = to_lower(phrase);
+      size_t pos = 0;
+      while ((pos = body_lower.find(phrase_lower, pos)) != std::string::npos) {
+        score.phrase_matches++;
+        pos += phrase_lower.length();
+      }
+    }
+    
+    // Count language indicators
+    for (const std::string& indicator : pattern.indicators) {
+      std::string indicator_lower = to_lower(indicator);
+      size_t pos = 0;
+      while ((pos = body_lower.find(indicator_lower, pos)) != std::string::npos) {
+        score.unicode_matches++;
+        pos += indicator_lower.length();
+      }
+    }
+    
+    // Calculate component scores
+    score.words = std::min(score.word_matches / (result.text_length / 100.0), 40.0);
+    score.phrases = std::min(score.phrase_matches / (result.text_length / 200.0), 30.0);  
+    score.unicode = std::min(score.unicode_matches / (result.text_length / 50.0), 30.0);
+    
+    score.total = score.words + score.phrases + score.unicode;
+    
+    // Boost score if language matches explicit declaration
+    if (!result.declared_language.empty() && result.declared_language != "none") {
+      std::map<std::string, std::string> lang_map = {
+        {"en", "English"}, {"es", "Spanish"}, {"fr", "French"}, {"de", "German"},
+        {"fa", "Persian"}, {"prs", "Dari"}, {"ku", "Kurdish"}, {"ps", "Pashto"},
+        {"bal", "Balochi"}, {"ar", "Arabic"}, {"ru", "Russian"}, {"zh", "Chinese"}
+      };
+      
+      std::string declared_code = result.declared_language.substr(0, 2);
+      if (lang_map.count(declared_code) && lang_map[declared_code] == language) {
+        score.total *= 1.5; // 50% boost for declared language
+      }
+    }
+  }
+  
+  // Find the language with highest score
+  if (!result.all_scores.empty()) {
+    auto max_elem = std::max_element(result.all_scores.begin(), result.all_scores.end(),
+      [](const auto& a, const auto& b) { return a.second.total < b.second.total; });
+    
+    result.primary_language = max_elem->first;
+    result.score = max_elem->second.total;
+    
+    // Determine confidence level
+    if (result.score >= 40) {
+      result.confidence = "High";
+      result.reason = "Strong language patterns detected";
+    } else if (result.score >= 20) {
+      result.confidence = "Medium";
+      result.reason = "Moderate language patterns detected";
+    } else if (result.score >= 5) {
+      result.confidence = "Low";
+      result.reason = "Weak language patterns detected";
+    } else {
+      result.confidence = "Very Low";
+      result.reason = "Minimal language patterns detected";
+    }
+  }
+  
+  return result;
+}
 
 // -----------------------------------------------------------------------------
 // Returns a non-empty reason string if the response looks geo-/region-blocked.
@@ -512,14 +726,16 @@ int QuicToyClient::SendRequestsAndPrintResponses(
     quic::QuicErrorCode error = client->session()->error();
     if (error == quic::QUIC_INVALID_VERSION) {
       std::cerr << "Failed to negotiate version with " << host << ":" << port
+                << "(" << client->server_address().host() << ":" << client->server_address().port() << ")"
                 << ". " << client->session()->error_details() << std::endl;
       // 0: No error.
       // 20: Failed to connect due to QUIC_INVALID_VERSION.
       return quiche::GetQuicheCommandLineFlag(FLAGS_version_mismatch_ok) ? 0
                                                                          : 20;
     }
-    std::cerr << "Failed to connect to " << host << ":" << port << ". "
-              << quic::QuicErrorCodeToString(error) << " "
+    std::cerr << "Failed to connect to " << host << ":" << port 
+              << "(" << client->server_address().host() << ":" << client->server_address().port() << ")"
+              << ". " << quic::QuicErrorCodeToString(error) << " "
               << client->session()->error_details() << std::endl;
     return 1;
   }
@@ -583,9 +799,7 @@ int QuicToyClient::SendRequestsAndPrintResponses(
 
   
   for (int i = 0; i < num_requests; ++i) {
-    // Send the request.
-    client->SendRequestAndWaitForResponse(header_block, body, /*fin=*/true);
-    // Print request and response details.
+    // Print request details before sending.
     if (!quiche::GetQuicheCommandLineFlag(FLAGS_quiet)) {
       std::cout << "Request:" << std::endl;
       std::cout << "headers:" << header_block.DebugString();
@@ -596,6 +810,13 @@ int QuicToyClient::SendRequestsAndPrintResponses(
         std::cout << "body: " << body << std::endl;
       }
       std::cout << std::endl;
+    }
+    
+    // Send the request.
+    client->SendRequestAndWaitForResponse(header_block, body, /*fin=*/true);
+    
+    // Print response details.
+    if (!quiche::GetQuicheCommandLineFlag(FLAGS_quiet)) {
 
       if (!client->preliminary_response_headers().empty()) {
         std::cout << "Preliminary response headers: "
@@ -606,6 +827,7 @@ int QuicToyClient::SendRequestsAndPrintResponses(
       std::cout << "Response:" << std::endl;
       std::cout << "headers: " << client->latest_response_headers()
                 << std::endl;
+
       std::string response_body = client->latest_response_body();
       // if (!quiche::GetQuicheCommandLineFlag(FLAGS_body_hex).empty()) {
       //   // Assume response is binary data.
@@ -632,6 +854,41 @@ int QuicToyClient::SendRequestsAndPrintResponses(
       } else {
         std::cout << "No geo-restriction detected.\n";
       }
+
+      // Language detection
+      LanguageDetectionResult lang_result = DetectLanguages(
+          client->latest_response_headers(), response_body);
+      
+      std::cout << "\n=== Language Detection ===" << std::endl;
+      std::cout << "Declared Language: " << lang_result.declared_language << std::endl;
+      std::cout << "Primary Language: " << lang_result.primary_language 
+                << " (Score: " << std::fixed << std::setprecision(1) << lang_result.score 
+                << ", Confidence: " << lang_result.confidence << ")" << std::endl;
+      std::cout << "Reason: " << lang_result.reason << std::endl;
+      std::cout << "Text Length: " << lang_result.text_length << " characters" << std::endl;
+      
+      // Show top language scores
+      if (!lang_result.all_scores.empty()) {
+        std::cout << "Top Language Scores:" << std::endl;
+        std::vector<std::pair<std::string, LanguageScore>> sorted_scores;
+        for (const auto& [lang, score] : lang_result.all_scores) {
+          sorted_scores.push_back({lang, score});
+        }
+        std::sort(sorted_scores.begin(), sorted_scores.end(),
+          [](const auto& a, const auto& b) { return a.second.total > b.second.total; });
+        
+        for (size_t i = 0; i < std::min(size_t(5), sorted_scores.size()); ++i) {
+          const auto& [lang, score] = sorted_scores[i];
+          if (score.total > 0) {
+            std::cout << "  " << (i+1) << ". " << lang << ": " 
+                      << std::fixed << std::setprecision(1) << score.total
+                      << " (U:" << score.unicode_matches 
+                      << " W:" << score.word_matches 
+                      << " P:" << score.phrase_matches << ")" << std::endl;
+          }
+        }
+      }
+      std::cout << "==========================\n" << std::endl;
 
       AppendCsvLog("quic_client_log.csv", host,
                    client->server_address().host().ToString(),
@@ -669,6 +926,90 @@ int QuicToyClient::SendRequestsAndPrintResponses(
     if (response_code >= 200 && response_code < 300) {
       std::cout << "Request succeeded (" << response_code << ")." << std::endl;
     } else if (response_code >= 300 && response_code < 400) {
+      // Handle redirects (301, 302, etc.) with loop for redirect chains
+      int redirect_count = 0;
+      const int max_redirects = 10; // Prevent infinite redirect loops
+      
+      while (response_code >= 300 && response_code < 400 && redirect_count < max_redirects) {
+        redirect_count++;
+        try {
+          const auto& response_header_block = client->latest_response_header_block();
+          auto location_it = response_header_block.find("location");
+          
+          if (location_it != response_header_block.end()) {
+            std::string location = std::string(location_it->second);
+            std::cout << "Redirect #" << redirect_count << " (" << response_code << ") to: " << location << std::endl;
+            
+            // Handle relative URLs
+            if (location.length() > 0 && location[0] == '/') {
+              // Relative URL - use current scheme and authority  
+              auto scheme_it = header_block.find(":scheme");
+              auto authority_it = header_block.find(":authority");
+              if (scheme_it != header_block.end() && authority_it != header_block.end()) {
+                std::string current_scheme = std::string(scheme_it->second);
+                std::string current_authority = std::string(authority_it->second);
+                location = current_scheme + "://" + current_authority + location;
+                std::cout << "Relative URL converted to: " << location << std::endl;
+              }
+            }
+            
+            // Parse the new URL
+            QuicUrl redirect_url(location, "https");
+            
+            // Clean up double slashes in path
+            std::string clean_path = redirect_url.PathParamsQuery();
+            if (clean_path.length() >= 2 && clean_path.substr(0, 2) == "//") {
+              clean_path = clean_path.substr(1); // Remove one slash
+              std::cout << "Cleaned path from '//' to '" << clean_path << "'" << std::endl;
+            }
+            
+            // Update header block with new URL
+            header_block[":scheme"] = redirect_url.scheme();
+            header_block[":authority"] = redirect_url.HostPort();
+            header_block[":path"] = clean_path;
+            
+            // Follow the redirect
+            std::cout << "Following redirect #" << redirect_count << "..." << std::endl;
+            
+            // Print redirect request headers before sending
+            std::cout << "Redirect Request:" << std::endl;
+            std::cout << "headers:" << header_block.DebugString();
+            std::cout << std::endl;
+            
+            client->SendRequestAndWaitForResponse(header_block, body, /*fin=*/true);
+            
+            // Update response_code for the next iteration
+            response_code = client->latest_response_code();
+
+            // Print the redirected response headers and body
+            std::cout << "Redirected Response #" << redirect_count << ":" << std::endl;
+            std::cout << "Connected to redirected server: " << redirect_url.host() 
+                      << "(" << client->server_address().host() << ":" 
+                      << client->server_address().port() << ")" << std::endl;
+            std::cout << "headers: " << client->latest_response_headers()
+                      << std::endl;
+
+          } else {
+            std::cout << "Redirect response missing Location header." << std::endl;
+            break; // Exit redirect loop if no location header
+          }
+        } catch (const std::exception& e) {
+          std::cout << "Error handling redirect: " << e.what() << std::endl;
+          break; // Exit redirect loop on error
+        }
+      }
+      
+      // Check final result after all redirects
+      if (redirect_count >= max_redirects) {
+        std::cout << "Too many redirects (" << max_redirects << "). Stopping." << std::endl;
+      } else if (response_code >= 200 && response_code < 300) {
+        std::cout << "Redirect chain followed successfully. Final response (" << response_code << ") after " << redirect_count << " redirects." << std::endl;
+      } else if (response_code >= 300 && response_code < 400) {
+        std::cout << "Redirect chain incomplete. Still getting redirect (" << response_code << ") after " << redirect_count << " redirects." << std::endl;
+      } else {
+        std::cout << "Redirect chain failed with response code (" << response_code << ") after " << redirect_count << " redirects." << std::endl;
+      }
+      
       if (quiche::GetQuicheCommandLineFlag(FLAGS_redirect_is_success)) {
         std::cout << "Request succeeded (redirect " << response_code << ")."
                   << std::endl;
