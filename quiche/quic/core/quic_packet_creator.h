@@ -31,8 +31,8 @@
 #include "quiche/quic/core/quic_types.h"
 #include "quiche/quic/platform/api/quic_export.h"
 #include "quiche/quic/platform/api/quic_flags.h"
-#include "quiche/common/platform/api/quiche_mem_slice.h"
 #include "quiche/common/quiche_circular_deque.h"
+#include "quiche/common/quiche_mem_slice.h"
 
 namespace quic {
 namespace test {
@@ -175,10 +175,10 @@ class QUICHE_EXPORT QuicPacketCreator {
   bool HasRoomForStreamFrame(QuicStreamId id, QuicStreamOffset offset,
                              size_t data_size);
 
-  // Returns true if current open packet can accommodate a message frame of
+  // Returns true if current open packet can accommodate a datagram frame of
   // |length|.
   // TODO(fayang): mark this const by moving RemoveSoftMaxPacketLength out.
-  bool HasRoomForMessageFrame(QuicByteCount length);
+  bool HasRoomForDatagramFrame(QuicByteCount length);
 
   // Serializes all added frames into a single packet and invokes the delegate_
   // to further process the SerializedPacket.
@@ -243,8 +243,8 @@ class QUICHE_EXPORT QuicPacketCreator {
   bool AddPaddedSavedFrame(const QuicFrame& frame,
                            TransmissionType transmission_type);
 
-  // Creates a connectivity probing packet for versions prior to version 99.
-  std::unique_ptr<SerializedPacket> SerializeConnectivityProbingPacket();
+  // Creates a connectivity probing packet for gQUIC.
+  std::unique_ptr<SerializedPacket> SerializeGQuicConnectivityProbingPacket();
 
   // Create connectivity probing request and response packets using PATH
   // CHALLENGE and PATH RESPONSE frames, respectively, for version 99/IETF QUIC.
@@ -354,7 +354,7 @@ class QUICHE_EXPORT QuicPacketCreator {
   // Sets the maximum packet length.
   void SetMaxPacketLength(QuicByteCount length);
 
-  // Sets the maximum DATAGRAM/MESSAGE frame size we can send.
+  // Sets the maximum DATAGRAM frame size we can send.
   void SetMaxDatagramFrameSize(QuicByteCount max_datagram_frame_size);
 
   // Set a soft maximum packet length in the creator. If a packet cannot be
@@ -425,16 +425,16 @@ class QUICHE_EXPORT QuicPacketCreator {
   // Set transmission type of next constructed packets.
   void SetTransmissionType(TransmissionType type);
 
-  // Tries to add a message frame containing |message| and returns the status.
-  MessageStatus AddMessageFrame(QuicMessageId message_id,
-                                absl::Span<quiche::QuicheMemSlice> message);
+  // Tries to add a datagram frame containing |datagram| and returns the status.
+  DatagramStatus AddDatagramFrame(QuicDatagramId datagram_id,
+                                  absl::Span<quiche::QuicheMemSlice> datagram);
 
-  // Returns the largest payload that will fit into a single MESSAGE frame.
-  QuicPacketLength GetCurrentLargestMessagePayload() const;
-  // Returns the largest payload that will fit into a single MESSAGE frame at
+  // Returns the largest payload that will fit into a single DATAGRAM frame.
+  QuicPacketLength GetCurrentLargestDatagramPayload() const;
+  // Returns the largest payload that will fit into a single DATAGRAM frame at
   // any point during the connection.  This assumes the version and
   // connection ID lengths do not change.
-  QuicPacketLength GetGuaranteedLargestMessagePayload() const;
+  QuicPacketLength GetGuaranteedLargestDatagramPayload() const;
 
   // Packet number of next created packet.
   QuicPacketNumber NextSendingPacketNumber() const;
@@ -717,7 +717,7 @@ class QUICHE_EXPORT QuicPacketCreator {
   // set to a soft value.
   QuicByteCount latched_hard_max_packet_length_;
 
-  // The maximum length of a MESSAGE/DATAGRAM frame that our peer is willing to
+  // The maximum length of a DATAGRAM frame that our peer is willing to
   // accept. There is no limit for QUIC_CRYPTO connections, but QUIC+TLS
   // negotiates this during the handshake.
   QuicByteCount max_datagram_frame_size_;

@@ -4,10 +4,14 @@
 
 #include "quiche/quic/core/crypto/chacha20_poly1305_tls_decrypter.h"
 
+#include <cstddef>
+#include <cstdint>
+
 #include "openssl/aead.h"
 #include "openssl/tls1.h"
-#include "quiche/quic/platform/api/quic_flag_utils.h"
-#include "quiche/quic/platform/api/quic_flags.h"
+#include "quiche/quic/core/crypto/chacha_base_decrypter.h"
+#include "quiche/quic/core/quic_constants.h"
+#include "quiche/quic/core/quic_types.h"
 
 namespace quic {
 
@@ -19,7 +23,7 @@ const size_t kNonceSize = 12;
 }  // namespace
 
 ChaCha20Poly1305TlsDecrypter::ChaCha20Poly1305TlsDecrypter()
-    : ChaChaBaseDecrypter(EVP_aead_chacha20_poly1305, kKeySize, kAuthTagSize,
+    : ChaChaBaseDecrypter(EVP_aead_chacha20_poly1305(), kKeySize, kAuthTagSize,
                           kNonceSize,
                           /* use_ietf_nonce_construction */ true) {
   static_assert(kKeySize <= kMaxKeySize, "key size too big");

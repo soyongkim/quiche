@@ -13,7 +13,6 @@
 #include "quiche/quic/test_tools/quic_stream_id_manager_peer.h"
 #include "quiche/quic/test_tools/quic_test_utils.h"
 
-using testing::_;
 using testing::StrictMock;
 
 namespace quic {
@@ -38,7 +37,7 @@ std::string PrintToString(const TestParams& p) {
 std::vector<TestParams> GetTestParams() {
   std::vector<TestParams> params;
   for (const ParsedQuicVersion& version : AllSupportedVersions()) {
-    if (!version.HasIetfQuicFrames()) {
+    if (!version.IsIetfQuic()) {
       continue;
     }
     params.push_back(TestParams(version, Perspective::IS_CLIENT));

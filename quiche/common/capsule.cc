@@ -13,6 +13,7 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -20,7 +21,6 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
-#include "absl/types/variant.h"
 #include "quiche/common/platform/api/quiche_bug_tracker.h"
 #include "quiche/common/platform/api/quiche_export.h"
 #include "quiche/common/platform/api/quiche_logging.h"
@@ -230,8 +230,8 @@ std::string WebTransportMaxStreamsCapsule::ToString() const {
 }
 
 std::string Capsule::ToString() const {
-  return absl::visit([](const auto& capsule) { return capsule.ToString(); },
-                     capsule_);
+  return std::visit([](const auto& capsule) { return capsule.ToString(); },
+                    capsule_);
 }
 
 std::ostream& operator<<(std::ostream& os, const Capsule& capsule) {
@@ -376,7 +376,9 @@ absl::StatusOr<quiche::QuicheBuffer> SerializeCapsuleWithStatus(
           capsule.capsule_type(), allocator,
           WireVarInt62(capsule.web_transport_max_streams().max_stream_count));
     case CapsuleType::COMPRESSION_ASSIGN:
-      QUICHE_DCHECK(capsule.compression_assign_capsule()
+      QUICHE_DCHECK(capsule.compression_assign_capsule().ip_address_port ==
+                        quiche::QuicheSocketAddress() ||
+                    capsule.compression_assign_capsule()
                             .ip_address_port.host()
                             .ToPackedString()
                             .size() == QuicheIpAddress::kIPv4AddressSize ||
@@ -385,8 +387,7 @@ absl::StatusOr<quiche::QuicheBuffer> SerializeCapsuleWithStatus(
                             .ToPackedString()
                             .size() == QuicheIpAddress::kIPv6AddressSize);
       if (capsule.compression_assign_capsule()
-              .ip_address_port.host()
-              .address_family() != IpAddressFamily::IP_UNSPEC) {
+              .ip_address_port.IsInitialized()) {
         return SerializeCapsuleFields(
             capsule.capsule_type(), allocator,
             WireVarInt62(capsule.compression_assign_capsule().context_id),
@@ -404,11 +405,7 @@ absl::StatusOr<quiche::QuicheBuffer> SerializeCapsuleWithStatus(
       return SerializeCapsuleFields(
           capsule.capsule_type(), allocator,
           WireVarInt62(capsule.compression_assign_capsule().context_id),
-          WireUint8(capsule.compression_assign_capsule()
-                                .ip_address_port.host()
-                                .AddressFamilyToInt() == AF_INET
-                        ? 4
-                        : 6));
+          WireUint8(0));
     case CapsuleType::COMPRESSION_CLOSE:
       return SerializeCapsuleFields(
           capsule.capsule_type(), allocator,

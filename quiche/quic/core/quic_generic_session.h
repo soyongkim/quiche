@@ -7,6 +7,9 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
+#include <vector>
 
 #include "absl/algorithm/container.h"
 #include "absl/strings/string_view.h"
@@ -52,6 +55,7 @@ class QUICHE_EXPORT QuicGenericSessionBase : public QuicSession,
   ~QuicGenericSessionBase();
 
   // QuicSession implementation.
+  void Initialize() override;
   std::vector<std::string> GetAlpnsToOffer() const override {
     return std::vector<std::string>({alpn_});
   }
@@ -76,7 +80,7 @@ class QUICHE_EXPORT QuicGenericSessionBase : public QuicSession,
   }
 
   void OnTlsHandshakeComplete() override;
-  void OnMessageReceived(absl::string_view message) override;
+  void OnDatagramReceived(absl::string_view datagram) override;
 
   // webtransport::Session implementation.
   webtransport::Stream* AcceptIncomingBidirectionalStream() override;
@@ -106,6 +110,9 @@ class QUICHE_EXPORT QuicGenericSessionBase : public QuicSession,
   }
   void NotifySessionDraining() override {}
   void SetOnDraining(quiche::SingleUseCallback<void()>) override {}
+  std::optional<std::string> GetNegotiatedSubprotocol() const override {
+    return alpn_;
+  }
 
   void CloseSession(webtransport::SessionErrorCode error_code,
                     absl::string_view error_message) override {
@@ -116,7 +123,7 @@ class QUICHE_EXPORT QuicGenericSessionBase : public QuicSession,
   }
 
   QuicByteCount GetMaxDatagramSize() const override {
-    return GetGuaranteedLargestMessagePayload();
+    return GetGuaranteedLargestDatagramPayload();
   }
 
  private:

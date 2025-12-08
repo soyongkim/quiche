@@ -41,7 +41,7 @@
 #include "quiche/quic/platform/api/quic_socket_address.h"
 #include "quiche/common/capsule.h"
 #include "quiche/common/http/http_header_block.h"
-#include "quiche/common/platform/api/quiche_mem_slice.h"
+#include "quiche/common/quiche_mem_slice.h"
 
 namespace quic {
 
@@ -162,7 +162,7 @@ class QUICHE_EXPORT QuicSpdyStream
   virtual void OnBodyAvailable() = 0;
 
   // Writes the headers contained in |header_block| on the dedicated headers
-  // stream or on this stream, depending on VersionUsesHttp3().  Returns the
+  // stream or on this stream, depending on VersionIsIetfQuic().  Returns the
   // number of bytes sent, including data sent on the encoder stream when using
   // QPACK.
   virtual size_t WriteHeaders(
@@ -174,7 +174,7 @@ class QUICHE_EXPORT QuicSpdyStream
   virtual void WriteOrBufferBody(absl::string_view data, bool fin);
 
   // Writes the trailers contained in |trailer_block| on the dedicated headers
-  // stream or on this stream, depending on VersionUsesHttp3().  Trailers will
+  // stream or on this stream, depending on VersionIsIetfQuic().  Trailers will
   // always have the FIN flag set.  Returns the number of bytes sent, including
   // data sent on the encoder stream when using QPACK.
   virtual size_t WriteTrailers(
@@ -305,7 +305,7 @@ class QUICHE_EXPORT QuicSpdyStream
 
   // Sends an HTTP/3 datagram. The stream ID is not part of |payload|. Virtual
   // to allow mocking in tests.
-  virtual MessageStatus SendHttp3Datagram(absl::string_view payload);
+  virtual DatagramStatus SendHttp3Datagram(absl::string_view payload);
 
   // Registers |visitor| to receive HTTP/3 datagrams and enables Capsule
   // Protocol by registering a CapsuleParser. |visitor| must be valid until a

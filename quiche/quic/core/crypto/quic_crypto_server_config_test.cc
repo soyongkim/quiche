@@ -466,7 +466,7 @@ TEST_F(CryptoServerConfigsTest, AdvancePrimaryViaValidate) {
   QuicSocketAddress server_address;
   QuicTransportVersion transport_version = QUIC_VERSION_UNSUPPORTED;
   for (const ParsedQuicVersion& version : AllSupportedVersions()) {
-    if (version.handshake_protocol == PROTOCOL_QUIC_CRYPTO) {
+    if (!version.IsIetfQuic()) {
       transport_version = version.transport_version;
       break;
     }
@@ -490,6 +490,18 @@ TEST_F(CryptoServerConfigsTest, InvalidConfigs) {
   test_peer_.CheckConfigs({{"a", false}, {"b", true}, {"c", false}});
   SetConfigs({{"a", 800, 1}, {"c", 1100, 1}, {"INVALID1", 1000, 1}});
   test_peer_.CheckConfigs({{"a", false}, {"b", true}, {"c", false}});
+}
+
+TEST_F(QuicCryptoServerConfigTest, SetProofVerifier) {
+  QuicRandom* rand = QuicRandom::GetInstance();
+  auto proof_verifier = crypto_test_utils::ProofVerifierForTesting();
+  auto proof_verifier_ptr = proof_verifier.get();
+  QuicCryptoServerConfig server(QuicCryptoServerConfig::TESTING, rand,
+                                crypto_test_utils::ProofSourceForTesting(),
+                                KeyExchangeSource::Default(),
+                                std::move(proof_verifier));
+  auto retrieved_proof_verifier = server.proof_verifier();
+  EXPECT_EQ(retrieved_proof_verifier, proof_verifier_ptr);
 }
 
 }  // namespace test

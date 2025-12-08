@@ -11,8 +11,8 @@
 
 #include "quiche/quic/core/quic_time.h"
 #include "quiche/quic/core/quic_types.h"
-#include "quiche/common/platform/api/quiche_mem_slice.h"
 #include "quiche/common/quiche_circular_deque.h"
+#include "quiche/common/quiche_mem_slice.h"
 
 namespace quic {
 
@@ -34,7 +34,7 @@ class QUICHE_EXPORT QuicDatagramQueue {
     // This function is called synchronously in `QuicDatagramQueue` methods.
     // `status` is nullopt when the datagram is dropped due to being in the
     // queue for too long.
-    virtual void OnDatagramProcessed(std::optional<MessageStatus> status) = 0;
+    virtual void OnDatagramProcessed(std::optional<DatagramStatus> status) = 0;
   };
 
   // |session| is not owned and must outlive this object.
@@ -44,12 +44,12 @@ class QUICHE_EXPORT QuicDatagramQueue {
   QuicDatagramQueue(QuicSession* session, std::unique_ptr<Observer> observer);
 
   // Adds the datagram to the end of the queue.  May send it immediately; if
-  // not, MESSAGE_STATUS_BLOCKED is returned.
-  MessageStatus SendOrQueueDatagram(quiche::QuicheMemSlice datagram);
+  // not, DATAGRAM_STATUS_BLOCKED is returned.
+  DatagramStatus SendOrQueueDatagram(quiche::QuicheMemSlice datagram);
 
   // Attempts to send a single datagram from the queue.  Returns the result of
-  // SendMessage(), or nullopt if there were no unexpired datagrams to send.
-  std::optional<MessageStatus> TrySendingNextDatagram();
+  // SendDatagram(), or nullopt if there were no unexpired datagrams to send.
+  std::optional<DatagramStatus> TrySendingNextDatagram();
 
   // Sends all of the unexpired datagrams until either the connection becomes
   // write-blocked or the queue is empty.  Returns the number of datagrams sent.
@@ -69,8 +69,8 @@ class QUICHE_EXPORT QuicDatagramQueue {
   // and related logic.
   void SetForceFlush(bool force_flush) { force_flush_ = force_flush; }
 
-  size_t queue_size() { return queue_.size(); }
-  bool empty() { return queue_.empty(); }
+  size_t queue_size() const { return queue_.size(); }
+  bool empty() const { return queue_.empty(); }
   uint64_t expired_datagram_count() const { return expired_datagram_count_; }
 
  private:

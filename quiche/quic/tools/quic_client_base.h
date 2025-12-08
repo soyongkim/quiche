@@ -39,6 +39,7 @@ class QUIC_EXPORT_PRIVATE PathMigrationContext
         alternative_writer_(std::move(writer)) {}
 
   QuicPacketWriter* WriterToUse() override { return alternative_writer_.get(); }
+  bool ShouldConnectionOwnWriter() const override { return false; }
 
   QuicPacketWriter* ReleaseWriter() { return alternative_writer_.release(); }
 
@@ -119,6 +120,7 @@ class QuicClientBase : public QuicSession::Visitor
   void OnServerPreferredAddressAvailable(
       const QuicSocketAddress& server_preferred_address) override;
   void OnPathDegrading() override;
+  void OnConfigNegotiated(const QuicConfig&) override {}
 
   // Initializes the client to create a connection. Should be called exactly
   // once before calling StartConnect or Connect. Returns true if the
@@ -362,6 +364,11 @@ class QuicClientBase : public QuicSession::Visitor
 
   virtual void OnSocketMigrationProbingFailure() {}
 
+  // Must be called before the initial Connect() call.
+  void set_handle_migration_in_session(bool handle_migration_in_session) {
+    handle_migration_in_session_ = handle_migration_in_session;
+  }
+
  protected:
   // TODO(rch): Move GetNumSentClientHellosFromSession and
   // GetNumReceivedServerConfigUpdatesFromSession into a new/better
@@ -375,12 +382,6 @@ class QuicClientBase : public QuicSession::Visitor
 
   // The number of server config updates received.
   virtual int GetNumReceivedServerConfigUpdatesFromSession() = 0;
-
-  // If this client supports buffering data, resend it.
-  virtual void ResendSavedData() = 0;
-
-  // If this client supports buffering data, clear it.
-  virtual void ClearDataToResend() = 0;
 
   // Takes ownership of |connection|. If you override this function,
   // you probably want to call ResetSession() in your destructor.
@@ -412,6 +413,10 @@ class QuicClientBase : public QuicSession::Visitor
 
   // Allows derived classes to access this when creating connections.
   ConnectionIdGeneratorInterface& connection_id_generator();
+
+  bool handle_migration_in_session() const {
+    return handle_migration_in_session_;
+  }
 
  private:
   // Returns true and set |version| if client can reconnect with a different
@@ -511,6 +516,9 @@ class QuicClientBase : public QuicSession::Visitor
 
   bool allow_port_migration_{false};
   uint32_t num_path_degrading_handled_{0};
+  // If true, the migration will be handled in the session instead of the
+  // client.
+  bool handle_migration_in_session_{false};
 };
 
 }  // namespace quic

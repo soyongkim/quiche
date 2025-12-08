@@ -20,6 +20,8 @@
 #include "quiche/balsa/balsa_headers.h"
 #include "quiche/balsa/balsa_visitor_interface.h"
 #include "quiche/balsa/header_properties.h"
+#include "quiche/balsa/http_validation_policy.h"
+#include "quiche/common/platform/api/quiche_flag_utils.h"
 #include "quiche/common/platform/api/quiche_logging.h"
 
 // When comparing characters (other than == and !=), cast to unsigned char
@@ -160,7 +162,8 @@ inline char* ParseOneIsland(char* current, char* begin, char* end,
 bool ParseHTTPFirstLine(char* begin, char* end, bool is_request,
                         BalsaHeaders* headers,
                         BalsaFrameEnums::ErrorCode* error_code,
-                        FirstLineValidationOption whitespace_option) {
+                        FirstLineValidationOption whitespace_option,
+                        FirstLineValidationOption multiple_spaces_option) {
   while (begin < end && (end[-1] == '\n' || end[-1] == '\r')) {
     --end;
   }
@@ -245,6 +248,27 @@ bool ParseHTTPFirstLine(char* begin, char* end, bool is_request,
         return false;
       }
     }
+  }
+
+  if (multiple_spaces_option != FirstLineValidationOption::NONE &&
+      absl::StrContains(headers->first_line(), "  ")) {
+    if (multiple_spaces_option == FirstLineValidationOption::REJECT) {
+      *error_code = is_request
+                        ? BalsaFrameEnums::MULTIPLE_SPACES_IN_REQUEST_LINE
+                        : BalsaFrameEnums::MULTIPLE_SPACES_IN_STATUS_LINE;
+      return false;
+    }
+    const absl::string_view part1(
+        begin + headers->non_whitespace_1_idx_,
+        headers->whitespace_2_idx_ - headers->non_whitespace_1_idx_);
+    const absl::string_view part2(
+        begin + headers->non_whitespace_2_idx_,
+        headers->whitespace_3_idx_ - headers->non_whitespace_2_idx_);
+    const absl::string_view part3(
+        begin + headers->non_whitespace_3_idx_,
+        headers->whitespace_4_idx_ - headers->non_whitespace_3_idx_);
+
+    headers->SetRequestFirstlineFromStringPieces(part1, part2, part3);
   }
 
   return true;
@@ -352,7 +376,8 @@ void BalsaFrame::ProcessFirstLine(char* begin, char* end) {
   BalsaFrameEnums::ErrorCode previous_error = last_error_;
   if (!ParseHTTPFirstLine(
           begin, end, is_request_, headers_, &last_error_,
-          http_validation_policy().sanitize_cr_tab_in_first_line)) {
+          http_validation_policy().sanitize_cr_tab_in_first_line,
+          http_validation_policy().sanitize_firstline_spaces)) {
     parse_state_ = BalsaFrameEnums::ERROR;
     HandleError(last_error_);
     return;
@@ -375,6 +400,16 @@ void BalsaFrame::ProcessFirstLine(char* begin, char* end) {
       headers_->whitespace_4_idx_ - headers_->non_whitespace_3_idx_);
 
   if (is_request_) {
+    const bool is_method_valid = header_properties::IsValidToken(part1);
+    if (http_validation_policy().disallow_invalid_request_methods &&
+        !is_method_valid) {
+      QUICHE_CODE_COUNT(disallow_invalid_request_methods_enforced);
+      parse_state_ = BalsaFrameEnums::ERROR;
+      last_error_ = BalsaFrameEnums::INVALID_REQUEST_METHOD;
+      HandleError(last_error_);
+      return;
+    }
+
     is_valid_target_uri_ = IsValidTargetUri(part1, part2);
     if (http_validation_policy().disallow_invalid_target_uris &&
         !is_valid_target_uri_) {
@@ -433,7 +468,8 @@ void BalsaFrame::CleanUpKeyValueWhitespace(
 
 bool BalsaFrame::FindColonsAndParseIntoKeyValue(const Lines& lines,
                                                 bool is_trailer,
-                                                BalsaHeaders* headers) {
+                                                BalsaHeaders* headers,
+                                                bool* has_continuation_lines) {
   QUICHE_DCHECK(!lines.empty());
   const char* stream_begin = headers->OriginalHeaderStreamBegin();
   // The last line is always just a newline (and is uninteresting).
@@ -453,9 +489,9 @@ bool BalsaFrame::FindColonsAndParseIntoKeyValue(const Lines& lines,
     const char* line_begin = stream_begin + lines[i].first;
 
     // Here we handle possible continuations.  Note that we do not replace
-    // the '\n' in the line before a continuation (at least, as of now),
-    // which implies that any code which looks for a value must deal with
-    // "\r\n", etc -within- the line (and not just at the end of it).
+    // the '\n' in the line before a continuation, but we do mark the line as
+    // having continuation lines so that the caller can deal with it later.
+    bool header_has_continuation_line = false;
     for (++i; i < lines_size_m1; ++i) {
       const char c = *(stream_begin + lines[i].first);
       if (CHAR_GT(c, ' ')) {
@@ -475,9 +511,14 @@ bool BalsaFrame::FindColonsAndParseIntoKeyValue(const Lines& lines,
                                : BalsaFrameEnums::INVALID_HEADER_FORMAT);
         return false;
       }
-
-      // If disallow_header_continuation_lines() is false, we neither reject nor
-      // normalize continuation lines, in violation of RFC7230.
+      // Getting here means we find obs-fold character (for header line
+      // continuation) and continuation is allowed.
+      HandleWarning(is_trailer ? BalsaFrameEnums::OBS_FOLD_IN_TRAILERS
+                               : BalsaFrameEnums::OBS_FOLD_IN_HEADERS);
+      if (http_validation_policy().sanitize_obs_fold_in_header_values) {
+        *has_continuation_lines = true;
+        header_has_continuation_line = true;
+      }
     }
     const char* line_end = stream_begin + lines[i - 1].second;
     QUICHE_DCHECK_LT(line_begin - stream_begin, line_end - stream_begin);
@@ -503,6 +544,8 @@ bool BalsaFrame::FindColonsAndParseIntoKeyValue(const Lines& lines,
     headers->header_lines_.push_back(HeaderLineDescription(
         line_begin - stream_begin, line_end - stream_begin,
         line_end - stream_begin, line_end - stream_begin, 0));
+    headers->header_lines_.back().has_continuation_line =
+        header_has_continuation_line;
     if (current >= line_end) {
       if (http_validation_policy().require_header_colon) {
         HandleError(is_trailer ? BalsaFrameEnums::TRAILER_MISSING_COLON
@@ -666,20 +709,19 @@ bool BalsaFrame::CheckHeaderLinesForInvalidChars(const Lines& lines,
       headers->OriginalHeaderStreamBegin() + lines.front().first;
   const char* stream_end =
       headers->OriginalHeaderStreamBegin() + lines.back().second;
-  bool found_invalid = false;
 
   for (const char* c = stream_begin; c < stream_end; c++) {
     if (header_properties::IsInvalidHeaderChar(*c)) {
-      found_invalid = true;
+      return true;
     }
     if (*c == '\r' &&
         http_validation_policy().disallow_lone_cr_in_request_headers &&
         c + 1 < stream_end && *(c + 1) != '\n') {
-      found_invalid = true;
+      return true;
     }
   }
 
-  return found_invalid;
+  return false;
 }
 
 void BalsaFrame::ProcessHeaderLines(const Lines& lines, bool is_trailer,
@@ -710,9 +752,15 @@ void BalsaFrame::ProcessHeaderLines(const Lines& lines, bool is_trailer,
   HeaderLines::size_type content_length_idx = 0;
   HeaderLines::size_type transfer_encoding_idx = 0;
   const char* stream_begin = headers->OriginalHeaderStreamBegin();
+  bool has_continuation_lines = false;
   // Parse the rest of the header or trailer data into key-value pairs.
-  if (!FindColonsAndParseIntoKeyValue(lines, is_trailer, headers)) {
+  if (!FindColonsAndParseIntoKeyValue(lines, is_trailer, headers,
+                                      &has_continuation_lines)) {
     return;
+  }
+  if (http_validation_policy().sanitize_obs_fold_in_header_values &&
+      has_continuation_lines) {
+    headers->FoldContinuationLines();
   }
   // At this point, we've parsed all of the headers/trailers.  Time to look
   // for those headers which we require for framing or for format errors.
@@ -926,11 +974,14 @@ size_t BalsaFrame::ProcessHeaders(const char* message_start,
           return message_current - original_message_start;
         }
       }
+      // Determine if this is the end of the headers.
       const size_t chars_since_last_slash_n =
           (message_current_idx - last_slash_n_idx_);
       last_slash_n_idx_ = message_current_idx;
       if (chars_since_last_slash_n > 2) {
-        // false positive.
+        // Optimization: if the line is longer than 2 characters, it must
+        // contain content and cannot be the terminating blank line. The loop
+        // continues to search for the next line.
         ++message_current;
         continue;
       }
@@ -1338,10 +1389,33 @@ size_t BalsaFrame::ProcessInput(const char* input, size_t size) {
           }
 
           const char c = *current;
-          if (HeaderFramingFound(c) != 0) {
-            // If we've found a "\r\n\r\n", then the message
-            // is done.
+          const int32_t framing_found = HeaderFramingFound(c);
+          if (framing_found != 0) {
+            // TODO(b/434893483) remove these code counts
+            if (framing_found == kValidTerm1 && is_request_) {
+              QUICHE_CODE_COUNT(balsa_frame_framing_found_valid_term1_request);
+            } else if (framing_found == kValidTerm1 && !is_request_) {
+              QUICHE_CODE_COUNT(balsa_frame_framing_found_valid_term1_response);
+            } else if (framing_found == kValidTerm2 && is_request_) {
+              QUICHE_CODE_COUNT(balsa_frame_framing_found_valid_term2_request);
+            } else if (framing_found == kValidTerm2 && !is_request_) {
+              QUICHE_CODE_COUNT(balsa_frame_framing_found_valid_term2_response);
+            }
+
+            // If we've found the end of the chunk, then we're done.
             ++current;
+
+            if (http_validation_policy()
+                    .require_chunked_body_end_with_crlf_crlf &&
+                framing_found != kValidTerm1) {
+              //  https://datatracker.ietf.org/doc/html/rfc9112#name-chunked-transfer-coding
+              // The ABNF for chunked coding states that both `last-chunk` _and_
+              // `chunked_body` must end with CR_LF, i.e. kValidTerm2 is not
+              // allowed.
+              HandleError(BalsaFrameEnums::INVALID_CHUNK_FRAMING);
+              return current - input;
+            }
+
             parse_state_ = BalsaFrameEnums::MESSAGE_FULLY_READ;
             visitor_->OnRawBodyInput(
                 absl::string_view(on_entry, current - on_entry));

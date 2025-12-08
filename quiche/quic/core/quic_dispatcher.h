@@ -162,6 +162,7 @@ class QUICHE_EXPORT QuicDispatcher
       const QuicSocketAddress& peer_address, ParsedQuicVersion version,
       const ParsedClientHello* parsed_chlo) override;
   void OnPathDegrading() override {}
+  void OnConfigNegotiated(const QuicConfig&) override {}
 
   // Create connections for previously buffered CHLOs as many as allowed.
   virtual void ProcessBufferedChlos(size_t max_connections_to_create);
@@ -321,11 +322,6 @@ class QUICHE_EXPORT QuicDispatcher
       const std::optional<QuicConnectionId>& replaced_connection_id,
       QuicPacketNumber last_sent_packet_number);
 
-  // Save/Restore per packet context.
-  virtual std::unique_ptr<QuicPerPacketContext> GetPerPacketContext() const;
-  virtual void RestorePerPacketContext(
-      std::unique_ptr<QuicPerPacketContext> /*context*/) {}
-
   // Called if a packet from an unseen connection is reset or rejected.
   virtual void OnNewConnectionRejected() {}
 
@@ -348,8 +344,9 @@ class QUICHE_EXPORT QuicDispatcher
   virtual void MaybeResetPacketsWithNoVersion(
       const quic::ReceivedPacketInfo& packet_info);
 
-  // Called on packets with unsupported versions.
-  virtual void MaybeSendVersionNegotiationPacket(
+  // Called on packets with unsupported versions. Returns true if a version
+  // negotiation packet is sent.
+  virtual bool MaybeSendVersionNegotiationPacket(
       const ReceivedPacketInfo& packet_info);
 
   virtual ConnectionIdGeneratorInterface& ConnectionIdGenerator() {
@@ -369,6 +366,8 @@ class QUICHE_EXPORT QuicDispatcher
     // If set, the TLS alert that will cause a connection close.
     // Always empty for Google QUIC.
     std::optional<uint8_t> tls_alert;
+    // If set, an invalid ack will cause a connection close.
+    bool has_invalid_ack = false;
   };
 
   // Try to extract information(sni, alpns, ...) if the full Client Hello has

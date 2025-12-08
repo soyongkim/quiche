@@ -20,6 +20,7 @@
 #include "quiche/quic/core/quic_constants.h"
 #include "quiche/quic/core/quic_crypto_client_stream.h"
 #include "quiche/quic/core/quic_error_codes.h"
+#include "quiche/quic/core/quic_force_blockable_packet_writer.h"
 #include "quiche/quic/core/quic_packet_writer.h"
 #include "quiche/quic/core/quic_path_validator.h"
 #include "quiche/quic/core/quic_server_id.h"
@@ -253,16 +254,24 @@ bool QuicClientBase::Connect() {
 void QuicClientBase::StartConnect() {
   QUICHE_DCHECK(initialized_);
   QUICHE_DCHECK(!connected());
-  QuicPacketWriter* writer = network_helper_->CreateQuicPacketWriter();
+  QuicPacketWriter* writer = nullptr;
+  if (!handle_migration_in_session_) {
+    writer = network_helper_->CreateQuicPacketWriter();
+  } else {
+    // To support connection/port migration using migration manager, the writer
+    // needs to be force blockable.
+    auto* force_blockable_writer = new QuicForceBlockablePacketWriter();
+    // Owns `inner_writer`.
+    force_blockable_writer->set_writer(
+        network_helper_->CreateQuicPacketWriter());
+    writer = force_blockable_writer;
+  }
   ParsedQuicVersion mutual_version = UnsupportedQuicVersion();
   const bool can_reconnect_with_different_version =
       CanReconnectWithDifferentVersion(&mutual_version);
   if (connected_or_attempting_connect()) {
     // Clear queued up data if client can not try to connect with a different
     // version.
-    if (!can_reconnect_with_different_version) {
-      ClearDataToResend();
-    }
     // Before we destroy the last session and create a new one, gather its stats
     // and update the stats for the overall connection.
     UpdateStats();
@@ -319,8 +328,6 @@ void QuicClientBase::Disconnect() {
         QUIC_PEER_GOING_AWAY, "Client disconnecting",
         ConnectionCloseBehavior::SEND_CONNECTION_CLOSE_PACKET);
   }
-
-  ClearDataToResend();
 
   network_helper_->CleanUpAllUDPSockets();
 }
@@ -399,8 +406,8 @@ bool QuicClientBase::MigrateSocketWithSpecifiedPort(
 }
 
 bool QuicClientBase::ValidateAndMigrateSocket(const QuicIpAddress& new_host) {
-  QUICHE_DCHECK(VersionHasIetfQuicFrames(
-      session_->connection()->version().transport_version));
+  QUICHE_DCHECK(
+      VersionIsIetfQuic(session_->connection()->version().transport_version));
   if (!connected()) {
     return false;
   }
@@ -485,7 +492,7 @@ bool QuicClientBase::WaitForOneRttKeysAvailable() {
 }
 
 bool QuicClientBase::WaitForHandshakeConfirmed() {
-  if (!session_->connection()->version().UsesTls()) {
+  if (!session_->connection()->version().IsIetfQuic()) {
     return WaitForOneRttKeysAvailable();
   }
   // Otherwise, wait for receipt of HANDSHAKE_DONE frame.

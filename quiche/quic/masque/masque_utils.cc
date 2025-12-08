@@ -41,7 +41,7 @@ ParsedQuicVersionVector MasqueSupportedVersions() {
   ParsedQuicVersionVector versions;
   for (const ParsedQuicVersion& version : AllSupportedVersions()) {
     // Use all versions that support IETF QUIC except QUICv2.
-    if (version.UsesHttp3() && !version.AlpnDeferToRFCv1()) {
+    if (version.IsIetfQuic() && !version.AlpnDeferToRFCv1()) {
       QuicEnableVersion(version);
       versions.push_back(version);
     }
@@ -60,6 +60,8 @@ std::string MasqueModeToString(MasqueMode masque_mode) {
       return "CONNECT-IP";
     case MasqueMode::kConnectEthernet:
       return "CONNECT-ETHERNET";
+    case MasqueMode::kConnectUdpBind:
+      return "CONNECT-UDP-BIND";
   }
   return absl::StrCat("Unknown(", static_cast<int>(masque_mode), ")");
 }

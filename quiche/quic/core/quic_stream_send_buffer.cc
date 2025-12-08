@@ -5,16 +5,22 @@
 #include "quiche/quic/core/quic_stream_send_buffer.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <utility>
 
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "quiche/quic/core/quic_data_writer.h"
 #include "quiche/quic/core/quic_interval.h"
-#include "quiche/quic/core/quic_utils.h"
+#include "quiche/quic/core/quic_interval_set.h"
+#include "quiche/quic/core/quic_stream_send_buffer_base.h"
+#include "quiche/quic/core/quic_types.h"
 #include "quiche/quic/platform/api/quic_bug_tracker.h"
-#include "quiche/quic/platform/api/quic_flag_utils.h"
 #include "quiche/quic/platform/api/quic_flags.h"
 #include "quiche/quic/platform/api/quic_logging.h"
-#include "quiche/common/platform/api/quiche_mem_slice.h"
+#include "quiche/common/platform/api/quiche_logging.h"
+#include "quiche/common/quiche_buffer_allocator.h"
+#include "quiche/common/quiche_mem_slice.h"
 
 namespace quic {
 
@@ -38,27 +44,16 @@ BufferedSlice& BufferedSlice::operator=(BufferedSlice&& other) = default;
 
 BufferedSlice::~BufferedSlice() {}
 
-QuicInterval<std::size_t> BufferedSlice::interval() const {
-  const std::size_t length = slice.length();
-  return QuicInterval<std::size_t>(offset, offset + length);
+QuicInterval<uint64_t> BufferedSlice::interval() const {
+  const uint64_t length = slice.length();
+  return QuicInterval<uint64_t>(offset, offset + length);
 }
 
-bool StreamPendingRetransmission::operator==(
-    const StreamPendingRetransmission& other) const {
-  return offset == other.offset && length == other.length;
-}
-
-QuicStreamSendBuffer::QuicStreamSendBuffer(
+QuicStreamSendBufferOld::QuicStreamSendBufferOld(
     quiche::QuicheBufferAllocator* allocator)
-    : stream_offset_(0),
-      allocator_(allocator),
-      stream_bytes_written_(0),
-      stream_bytes_outstanding_(0),
-      write_index_(-1) {}
+    : allocator_(allocator) {}
 
-QuicStreamSendBuffer::~QuicStreamSendBuffer() {}
-
-void QuicStreamSendBuffer::SaveStreamData(absl::string_view data) {
+void QuicStreamSendBufferOld::SaveStreamData(absl::string_view data) {
   QUIC_DVLOG(2) << "Save stream data offset " << stream_offset_ << " length "
                 << data.length();
   QUICHE_DCHECK(!data.empty());
@@ -77,7 +72,7 @@ void QuicStreamSendBuffer::SaveStreamData(absl::string_view data) {
   }
 }
 
-void QuicStreamSendBuffer::SaveMemSlice(quiche::QuicheMemSlice slice) {
+void QuicStreamSendBufferOld::SaveMemSlice(quiche::QuicheMemSlice slice) {
   QUIC_DVLOG(2) << "Save slice offset " << stream_offset_ << " length "
                 << slice.length();
   if (slice.empty()) {
@@ -90,11 +85,11 @@ void QuicStreamSendBuffer::SaveMemSlice(quiche::QuicheMemSlice slice) {
   stream_offset_ += length;
 }
 
-QuicByteCount QuicStreamSendBuffer::SaveMemSliceSpan(
+QuicByteCount QuicStreamSendBufferOld::SaveMemSliceSpan(
     absl::Span<quiche::QuicheMemSlice> span) {
   QuicByteCount total = 0;
   for (quiche::QuicheMemSlice& slice : span) {
-    if (slice.length() == 0) {
+    if (slice.empty()) {
       // Skip empty slices.
       continue;
     }
@@ -104,14 +99,9 @@ QuicByteCount QuicStreamSendBuffer::SaveMemSliceSpan(
   return total;
 }
 
-void QuicStreamSendBuffer::OnStreamDataConsumed(size_t bytes_consumed) {
-  stream_bytes_written_ += bytes_consumed;
-  stream_bytes_outstanding_ += bytes_consumed;
-}
-
-bool QuicStreamSendBuffer::WriteStreamData(QuicStreamOffset offset,
-                                           QuicByteCount data_length,
-                                           QuicDataWriter* writer) {
+bool QuicStreamSendBufferOld::WriteStreamData(QuicStreamOffset offset,
+                                              QuicByteCount data_length,
+                                              QuicDataWriter* writer) {
   // The iterator returned from |interval_deque_| will automatically advance
   // the internal write index for the QuicIntervalDeque. The incrementing is
   // done in operator++.
@@ -136,99 +126,8 @@ bool QuicStreamSendBuffer::WriteStreamData(QuicStreamOffset offset,
   return data_length == 0;
 }
 
-bool QuicStreamSendBuffer::OnStreamDataAcked(
-    QuicStreamOffset offset, QuicByteCount data_length,
-    QuicByteCount* newly_acked_length) {
-  QUIC_DVLOG(2) << "Marking data acked at offset " << offset << " length "
-                << data_length;
-  *newly_acked_length = 0;
-  if (data_length == 0) {
-    return true;
-  }
-  if (bytes_acked_.Empty() || offset >= bytes_acked_.rbegin()->max() ||
-      bytes_acked_.IsDisjoint(
-          QuicInterval<QuicStreamOffset>(offset, offset + data_length))) {
-    // Optimization for the typical case, when all data is newly acked.
-    if (stream_bytes_outstanding_ < data_length) {
-      return false;
-    }
-    bytes_acked_.AddOptimizedForAppend(offset, offset + data_length);
-    *newly_acked_length = data_length;
-    stream_bytes_outstanding_ -= data_length;
-    pending_retransmissions_.Difference(offset, offset + data_length);
-    if (!FreeMemSlices(offset, offset + data_length)) {
-      return false;
-    }
-    CleanUpBufferedSlices();
-    return true;
-  }
-  // Exit if no new data gets acked.
-  if (bytes_acked_.Contains(offset, offset + data_length)) {
-    return true;
-  }
-  // Execute the slow path if newly acked data fill in existing holes.
-  QuicIntervalSet<QuicStreamOffset> newly_acked(offset, offset + data_length);
-  newly_acked.Difference(bytes_acked_);
-  for (const auto& interval : newly_acked) {
-    *newly_acked_length += (interval.max() - interval.min());
-  }
-  if (stream_bytes_outstanding_ < *newly_acked_length) {
-    return false;
-  }
-  stream_bytes_outstanding_ -= *newly_acked_length;
-  bytes_acked_.Add(offset, offset + data_length);
-  pending_retransmissions_.Difference(offset, offset + data_length);
-  if (newly_acked.Empty()) {
-    return true;
-  }
-  if (!FreeMemSlices(newly_acked.begin()->min(), newly_acked.rbegin()->max())) {
-    return false;
-  }
-  CleanUpBufferedSlices();
-  return true;
-}
-
-void QuicStreamSendBuffer::OnStreamDataLost(QuicStreamOffset offset,
-                                            QuicByteCount data_length) {
-  if (data_length == 0) {
-    return;
-  }
-  QuicIntervalSet<QuicStreamOffset> bytes_lost(offset, offset + data_length);
-  bytes_lost.Difference(bytes_acked_);
-  if (bytes_lost.Empty()) {
-    return;
-  }
-  for (const auto& lost : bytes_lost) {
-    pending_retransmissions_.Add(lost.min(), lost.max());
-  }
-}
-
-void QuicStreamSendBuffer::OnStreamDataRetransmitted(
-    QuicStreamOffset offset, QuicByteCount data_length) {
-  if (data_length == 0) {
-    return;
-  }
-  pending_retransmissions_.Difference(offset, offset + data_length);
-}
-
-bool QuicStreamSendBuffer::HasPendingRetransmission() const {
-  return !pending_retransmissions_.Empty();
-}
-
-StreamPendingRetransmission QuicStreamSendBuffer::NextPendingRetransmission()
-    const {
-  if (HasPendingRetransmission()) {
-    const auto pending = pending_retransmissions_.begin();
-    return {pending->min(), pending->max() - pending->min()};
-  }
-  QUIC_BUG(quic_bug_10853_3)
-      << "NextPendingRetransmission is called unexpected with no "
-         "pending retransmissions.";
-  return {0, 0};
-}
-
-bool QuicStreamSendBuffer::FreeMemSlices(QuicStreamOffset start,
-                                         QuicStreamOffset end) {
+bool QuicStreamSendBufferOld::FreeMemSlices(QuicStreamOffset start,
+                                            QuicStreamOffset end) {
   auto it = interval_deque_.DataBegin();
   if (it == interval_deque_.DataEnd() || it->slice.empty()) {
     QUIC_BUG(quic_bug_10853_4)
@@ -255,26 +154,44 @@ bool QuicStreamSendBuffer::FreeMemSlices(QuicStreamOffset start,
       break;
     }
     if (!it->slice.empty() &&
-        bytes_acked_.Contains(it->offset, it->offset + it->slice.length())) {
+        bytes_acked().Contains(it->offset, it->offset + it->slice.length())) {
       it->slice.Reset();
     }
   }
   return true;
 }
 
-void QuicStreamSendBuffer::CleanUpBufferedSlices() {
+void QuicStreamSendBufferOld::CleanUpBufferedSlices() {
   while (!interval_deque_.Empty() &&
          interval_deque_.DataBegin()->slice.empty()) {
     interval_deque_.PopFront();
   }
 }
 
-bool QuicStreamSendBuffer::IsStreamDataOutstanding(
-    QuicStreamOffset offset, QuicByteCount data_length) const {
-  return data_length > 0 &&
-         !bytes_acked_.Contains(offset, offset + data_length);
+size_t QuicStreamSendBufferOld::size() const { return interval_deque_.Size(); }
+
+void QuicStreamSendBufferOld::SetStreamOffsetForTest(
+    QuicStreamOffset new_offset) {
+  QuicStreamSendBufferBase::SetStreamOffsetForTest(new_offset);
+  stream_offset_ = new_offset;
 }
 
-size_t QuicStreamSendBuffer::size() const { return interval_deque_.Size(); }
+absl::string_view QuicStreamSendBufferOld::LatestWriteForTest() {
+  absl::string_view last_slice = "";
+  for (auto it = interval_deque_.DataBegin(); it != interval_deque_.DataEnd();
+       ++it) {
+    last_slice = it->slice.AsStringView();
+  }
+  return last_slice;
+}
+
+QuicByteCount QuicStreamSendBufferOld::TotalDataBufferedForTest() {
+  QuicByteCount length = 0;
+  for (auto slice = interval_deque_.DataBegin();
+       slice != interval_deque_.DataEnd(); ++slice) {
+    length += slice->slice.length();
+  }
+  return length;
+}
 
 }  // namespace quic

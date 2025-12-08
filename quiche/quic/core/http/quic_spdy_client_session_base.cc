@@ -13,8 +13,6 @@
 #include "quiche/quic/platform/api/quic_flags.h"
 #include "quiche/quic/platform/api/quic_logging.h"
 
-using quiche::HttpHeaderBlock;
-
 namespace quic {
 
 QuicSpdyClientSessionBase::QuicSpdyClientSessionBase(
@@ -34,7 +32,7 @@ void QuicSpdyClientSessionBase::OnConfigNegotiated() {
 
 void QuicSpdyClientSessionBase::OnStreamClosed(QuicStreamId stream_id) {
   QuicSpdySession::OnStreamClosed(stream_id);
-  if (!VersionUsesHttp3(transport_version())) {
+  if (!VersionIsIetfQuic(transport_version())) {
     headers_stream()->MaybeReleaseSequencerBuffer();
   }
 }

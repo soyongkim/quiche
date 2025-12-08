@@ -8,34 +8,33 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "absl/status/status.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
-#include "absl/types/variant.h"
 #include "quiche/quic/moqt/moqt_messages.h"
 #include "quiche/common/platform/api/quiche_test.h"
 #include "quiche/common/quiche_data_reader.h"
+#include "quiche/common/quiche_mem_slice.h"
 #include "quiche/common/quiche_stream.h"
 
 namespace moqt::test {
 
 // TODO: remove MoqtObject from TestMessageBase::MessageStructuredData and merge
 // those two types.
-using MoqtGenericFrame =
-    absl::variant<MoqtClientSetup, MoqtServerSetup, MoqtSubscribe,
-                  MoqtSubscribeOk, MoqtSubscribeError, MoqtUnsubscribe,
-                  MoqtSubscribeDone, MoqtSubscribeUpdate, MoqtAnnounce,
-                  MoqtAnnounceOk, MoqtAnnounceError, MoqtAnnounceCancel,
-                  MoqtTrackStatusRequest, MoqtUnannounce, MoqtTrackStatus,
-                  MoqtGoAway, MoqtSubscribeAnnounces, MoqtSubscribeAnnouncesOk,
-                  MoqtSubscribeAnnouncesError, MoqtUnsubscribeAnnounces,
-                  MoqtMaxSubscribeId, MoqtFetch, MoqtFetchCancel, MoqtFetchOk,
-                  MoqtFetchError, MoqtSubscribesBlocked, MoqtObjectAck>;
-
-MoqtMessageType MessageTypeForGenericMessage(const MoqtGenericFrame& frame);
+using MoqtGenericFrame = std::variant<
+    MoqtClientSetup, MoqtServerSetup, MoqtSubscribe, MoqtSubscribeOk,
+    MoqtSubscribeError, MoqtUnsubscribe, MoqtPublishDone, MoqtSubscribeUpdate,
+    MoqtPublishNamespace, MoqtPublishNamespaceOk, MoqtPublishNamespaceError,
+    MoqtPublishNamespaceDone, MoqtPublishNamespaceCancel, MoqtTrackStatus,
+    MoqtTrackStatusOk, MoqtTrackStatusError, MoqtGoAway, MoqtSubscribeNamespace,
+    MoqtSubscribeNamespaceOk, MoqtSubscribeNamespaceError,
+    MoqtUnsubscribeNamespace, MoqtMaxRequestId, MoqtFetch, MoqtFetchCancel,
+    MoqtFetchOk, MoqtFetchError, MoqtRequestsBlocked, MoqtPublish,
+    MoqtPublishOk, MoqtPublishError, MoqtObjectAck>;
 
 std::string SerializeGenericMessage(const MoqtGenericFrame& frame,
                                     bool use_webtrans = false);
@@ -45,13 +44,23 @@ std::vector<MoqtGenericFrame> ParseGenericMessage(absl::string_view body);
 
 MATCHER_P(SerializedControlMessage, message,
           "Matches against a specific expected MoQT message") {
-  std::string merged_message = absl::StrJoin(arg, "");
+  std::vector<absl::string_view> data_written;
+  data_written.reserve(arg.size());
+  for (const quiche::QuicheMemSlice& slice : arg) {
+    data_written.push_back(slice.AsStringView());
+  }
+  std::string merged_message = absl::StrJoin(data_written, "");
   return merged_message == SerializeGenericMessage(message);
 }
 
 MATCHER_P(ControlMessageOfType, expected_type,
           "Matches against an MoQT message of a specific type") {
-  std::string merged_message = absl::StrJoin(arg, "");
+  std::vector<absl::string_view> data_written;
+  data_written.reserve(arg.size());
+  for (const quiche::QuicheMemSlice& slice : arg) {
+    data_written.push_back(slice.AsStringView());
+  }
+  std::string merged_message = absl::StrJoin(data_written, "");
   quiche::QuicheDataReader reader(merged_message);
   uint64_t type_raw;
   if (!reader.ReadVarInt62(&type_raw)) {

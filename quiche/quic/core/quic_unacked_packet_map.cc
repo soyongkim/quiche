@@ -4,6 +4,7 @@
 
 #include "quiche/quic/core/quic_unacked_packet_map.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <limits>
 #include <type_traits>
@@ -18,6 +19,7 @@
 #include "quiche/quic/core/quic_utils.h"
 #include "quiche/quic/platform/api/quic_bug_tracker.h"
 #include "quiche/quic/platform/api/quic_flag_utils.h"
+#include "quiche/quic/platform/api/quic_flags.h"
 #include "quiche/common/simple_buffer_allocator.h"
 
 namespace quic {
@@ -52,7 +54,7 @@ enum QuicFrameTypeBitfield : uint32_t {
   kPathResponseFrameBitfield = 1 << 16,
   kPathChallengeFrameBitfield = 1 << 17,
   kStopSendingFrameBitfield = 1 << 18,
-  kMessageFrameBitfield = 1 << 19,
+  kDatagramFrameBitfield = 1 << 19,
   kNewTokenFrameBitfield = 1 << 20,
   kRetireConnectionIdFrameBitfield = 1 << 21,
   kAckFrequencyFrameBitfield = 1 << 22,
@@ -100,8 +102,8 @@ QuicFrameTypeBitfield GetFrameTypeBitfield(QuicFrameType type) {
       return kPathChallengeFrameBitfield;
     case STOP_SENDING_FRAME:
       return kStopSendingFrameBitfield;
-    case MESSAGE_FRAME:
-      return kMessageFrameBitfield;
+    case DATAGRAM_FRAME:
+      return kDatagramFrameBitfield;
     case NEW_TOKEN_FRAME:
       return kNewTokenFrameBitfield;
     case RETIRE_CONNECTION_ID_FRAME:
@@ -504,7 +506,8 @@ bool QuicUnackedPacketMap::NotifyFramesAcked(QuicPacketNumber packet_number,
   const QuicFrames* frames = &info->retransmittable_frames;
   quiche::SimpleBufferAllocator allocator;
   std::optional<QuicFrames> frames_copy;
-  const bool use_copied_frames = !HasMessageFrame(info->retransmittable_frames);
+  const bool use_copied_frames =
+      !HasDatagramFrame(info->retransmittable_frames);
 
   if (use_copied_frames) {
     frames = &frames_copy.emplace(
@@ -548,7 +551,8 @@ void QuicUnackedPacketMap::MaybeAggregateAckedStreamFrame(
   const QuicFrames* frames = &info->retransmittable_frames;
   quiche::SimpleBufferAllocator allocator;
   std::optional<QuicFrames> frames_copy;
-  const bool use_copied_frames = !HasMessageFrame(info->retransmittable_frames);
+  const bool use_copied_frames =
+      !HasDatagramFrame(info->retransmittable_frames);
 
   if (use_copied_frames) {
     frames = &frames_copy.emplace(
@@ -728,6 +732,11 @@ int32_t QuicUnackedPacketMap::GetLastPacketContent() const {
     content |= GetFrameTypeBitfield(ACK_FRAME);
   }
   return content;
+}
+
+void QuicUnackedPacketMap::ReserveInitialCapacity(size_t initial_capacity) {
+  const size_t flag_capacity = GetQuicFlag(quic_preallocate_unacked_packets);
+  unacked_packets_.reserve(std::max(initial_capacity, flag_capacity));
 }
 
 }  // namespace quic

@@ -65,7 +65,6 @@ using spdy::SpdyStreamId;
 using spdy::SpdyWindowUpdateIR;
 using testing::_;
 using testing::AnyNumber;
-using testing::AtLeast;
 using testing::InSequence;
 using testing::Invoke;
 using testing::Return;
@@ -171,7 +170,7 @@ std::vector<TestParams> GetTestParams() {
   std::vector<TestParams> params;
   ParsedQuicVersionVector all_supported_versions = AllSupportedVersions();
   for (size_t i = 0; i < all_supported_versions.size(); ++i) {
-    if (VersionUsesHttp3(all_supported_versions[i].transport_version)) {
+    if (VersionIsIetfQuic(all_supported_versions[i].transport_version)) {
       continue;
     }
     for (Perspective p : {Perspective::IS_SERVER, Perspective::IS_CLIENT}) {

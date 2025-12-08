@@ -41,13 +41,11 @@
 #include "quiche/quic/test_tools/simple_session_cache.h"
 #include "quiche/common/http/http_header_block.h"
 
-using quiche::HttpHeaderBlock;
 using ::testing::_;
 using ::testing::AnyNumber;
 using ::testing::AtLeast;
 using ::testing::AtMost;
 using ::testing::Invoke;
-using ::testing::StrictMock;
 using ::testing::Truly;
 
 namespace quic {
@@ -144,7 +142,7 @@ class QuicSpdyClientSessionTest : public QuicTestWithParam<ParsedQuicVersion> {
   }
 
   void CompleteCryptoHandshake(uint32_t server_max_incoming_streams) {
-    if (VersionHasIetfQuicFrames(connection_->transport_version())) {
+    if (VersionIsIetfQuic(connection_->transport_version())) {
       EXPECT_CALL(*connection_, SendControlFrame(_))
           .Times(::testing::AnyNumber())
           .WillRepeatedly(Invoke(
@@ -152,7 +150,7 @@ class QuicSpdyClientSessionTest : public QuicTestWithParam<ParsedQuicVersion> {
     }
     session_->CryptoConnect();
     QuicConfig config = DefaultQuicConfig();
-    if (VersionHasIetfQuicFrames(connection_->transport_version())) {
+    if (VersionIsIetfQuic(connection_->transport_version())) {
       config.SetMaxUnidirectionalStreamsToSend(server_max_incoming_streams);
       config.SetMaxBidirectionalStreamsToSend(server_max_incoming_streams);
     } else {
@@ -180,7 +178,7 @@ class QuicSpdyClientSessionTest : public QuicTestWithParam<ParsedQuicVersion> {
   void CompleteFirstConnection() {
     CompleteCryptoHandshake();
     EXPECT_FALSE(session_->GetCryptoStream()->IsResumption());
-    if (session_->version().UsesHttp3()) {
+    if (session_->version().IsIetfQuic()) {
       SettingsFrame settings;
       settings.values[SETTINGS_QPACK_MAX_TABLE_CAPACITY] = 2;
       settings.values[SETTINGS_MAX_FIELD_SECTION_SIZE] = 5;
@@ -217,7 +215,7 @@ TEST_P(QuicSpdyClientSessionTest, GetSSLConfig) {
 TEST_P(QuicSpdyClientSessionTest, CryptoConnect) { CompleteCryptoHandshake(); }
 
 TEST_P(QuicSpdyClientSessionTest, NoEncryptionAfterInitialEncryption) {
-  if (GetParam().handshake_protocol == PROTOCOL_TLS1_3) {
+  if (GetParam().IsIetfQuic()) {
     // This test relies on resumption and is QUIC crypto specific, so it is
     // disabled for TLS.
     return;
@@ -291,7 +289,7 @@ TEST_P(QuicSpdyClientSessionTest, MaxNumStreamsWithRst) {
                                            QUIC_RST_ACKNOWLEDGEMENT, 0));
   // Check that a new one can be created.
   EXPECT_EQ(0u, QuicSessionPeer::GetNumOpenDynamicStreams(session_.get()));
-  if (VersionHasIetfQuicFrames(GetParam().transport_version)) {
+  if (VersionIsIetfQuic(GetParam().transport_version)) {
     // In IETF QUIC the stream limit increases only if we get a MAX_STREAMS
     // frame; pretend we got one.
 
@@ -301,7 +299,7 @@ TEST_P(QuicSpdyClientSessionTest, MaxNumStreamsWithRst) {
   }
   stream = session_->CreateOutgoingBidirectionalStream();
   EXPECT_NE(nullptr, stream);
-  if (VersionHasIetfQuicFrames(GetParam().transport_version)) {
+  if (VersionIsIetfQuic(GetParam().transport_version)) {
     // Ensure that we have 2 total streams, 1 open and 1 closed.
     QuicStreamCount expected_stream_count = 2;
     EXPECT_EQ(expected_stream_count,
@@ -321,7 +319,7 @@ TEST_P(QuicSpdyClientSessionTest, ResetAndTrailers) {
   QuicSpdyClientStream* stream = session_->CreateOutgoingBidirectionalStream();
   ASSERT_NE(nullptr, stream);
 
-  if (VersionHasIetfQuicFrames(GetParam().transport_version)) {
+  if (VersionIsIetfQuic(GetParam().transport_version)) {
     // For IETF QUIC, trying to open a stream and failing due to lack
     // of stream ids will result in a STREAMS_BLOCKED. Make
     // sure we get one. Also clear out the frame because if it's
@@ -340,7 +338,7 @@ TEST_P(QuicSpdyClientSessionTest, ResetAndTrailers) {
 
   EXPECT_CALL(*connection_, SendControlFrame(_))
       .Times(AtLeast(1))
-      .WillRepeatedly(Invoke(&ClearControlFrame));
+      .WillRepeatedly(&ClearControlFrame);
   EXPECT_CALL(*connection_, OnStreamReset(_, _)).Times(1);
   session_->ResetStream(stream_id, QUIC_STREAM_PEER_GOING_AWAY);
 
@@ -361,7 +359,7 @@ TEST_P(QuicSpdyClientSessionTest, ResetAndTrailers) {
   // The stream is now complete from the client's perspective, and it should
   // be able to create a new outgoing stream.
   EXPECT_EQ(0u, QuicSessionPeer::GetNumOpenDynamicStreams(session_.get()));
-  if (VersionHasIetfQuicFrames(GetParam().transport_version)) {
+  if (VersionIsIetfQuic(GetParam().transport_version)) {
     QuicMaxStreamsFrame frame(0, 2,
                               /*unidirectional=*/false);
 
@@ -369,7 +367,7 @@ TEST_P(QuicSpdyClientSessionTest, ResetAndTrailers) {
   }
   stream = session_->CreateOutgoingBidirectionalStream();
   EXPECT_NE(nullptr, stream);
-  if (VersionHasIetfQuicFrames(GetParam().transport_version)) {
+  if (VersionIsIetfQuic(GetParam().transport_version)) {
     // Ensure that we have 2 open streams.
     QuicStreamCount expected_stream_count = 2;
     EXPECT_EQ(expected_stream_count,
@@ -391,7 +389,7 @@ TEST_P(QuicSpdyClientSessionTest, ReceivedMalformedTrailersAfterSendingRst) {
   QuicStreamId stream_id = stream->id();
   EXPECT_CALL(*connection_, SendControlFrame(_))
       .Times(AtLeast(1))
-      .WillRepeatedly(Invoke(&ClearControlFrame));
+      .WillRepeatedly(&ClearControlFrame);
   EXPECT_CALL(*connection_, OnStreamReset(_, _)).Times(1);
   session_->ResetStream(stream_id, QUIC_STREAM_PEER_GOING_AWAY);
 
@@ -415,7 +413,7 @@ TEST_P(QuicSpdyClientSessionTest, OnStreamHeaderListWithStaticStream) {
 
   // Initialize H/3 control stream.
   QuicStreamId id;
-  if (VersionUsesHttp3(connection_->transport_version())) {
+  if (VersionIsIetfQuic(connection_->transport_version())) {
     id = GetNthServerInitiatedUnidirectionalStreamId(
         connection_->transport_version(), 3);
     char type[] = {0x00};
@@ -434,7 +432,7 @@ TEST_P(QuicSpdyClientSessionTest, OnStreamHeaderListWithStaticStream) {
 }
 
 TEST_P(QuicSpdyClientSessionTest, GoAwayReceived) {
-  if (VersionHasIetfQuicFrames(connection_->transport_version())) {
+  if (VersionIsIetfQuic(connection_->transport_version())) {
     return;
   }
   CompleteCryptoHandshake();
@@ -478,8 +476,6 @@ TEST_P(QuicSpdyClientSessionTest, InvalidPacketReceived) {
   session_->ProcessUdpPacket(client_address, server_address, valid_packet);
 
   // Verify that a non-decryptable packet doesn't close the connection.
-  QuicFramerPeer::SetLastSerializedServerConnectionId(
-      QuicConnectionPeer::GetFramer(connection_), connection_id);
   ParsedQuicVersionVector versions = SupportedVersions(GetParam());
   QuicConnectionId destination_connection_id = EmptyQuicConnectionId();
   QuicConnectionId source_connection_id = connection_id;
@@ -501,7 +497,7 @@ TEST_P(QuicSpdyClientSessionTest, InvalidFramedPacketReceived) {
   const ParsedQuicVersion version = GetParam();
   QuicSocketAddress server_address(TestPeerIPAddress(), kTestPort);
   QuicSocketAddress client_address(TestPeerIPAddress(), kTestPort);
-  if (version.KnowsWhichDecrypterToUse()) {
+  if (version.IsIetfQuic()) {
     connection_->InstallDecrypter(
         ENCRYPTION_FORWARD_SECURE,
         std::make_unique<StrictTaggingDecrypter>(ENCRYPTION_FORWARD_SECURE));
@@ -521,8 +517,6 @@ TEST_P(QuicSpdyClientSessionTest, InvalidFramedPacketReceived) {
   QuicConnectionId destination_connection_id =
       session_->connection()->connection_id();
   QuicConnectionId source_connection_id = destination_connection_id;
-  QuicFramerPeer::SetLastSerializedServerConnectionId(
-      QuicConnectionPeer::GetFramer(connection_), destination_connection_id);
   bool version_flag = true;
   QuicConnectionIdIncluded scid_included = CONNECTION_ID_PRESENT;
   std::unique_ptr<QuicEncryptedPacket> packet(ConstructMisFramedEncryptedPacket(
@@ -537,7 +531,7 @@ TEST_P(QuicSpdyClientSessionTest, InvalidFramedPacketReceived) {
 
 TEST_P(QuicSpdyClientSessionTest,
        TryToCreateServerInitiatedBidirectionalStream) {
-  if (VersionHasIetfQuicFrames(connection_->transport_version())) {
+  if (VersionIsIetfQuic(connection_->transport_version())) {
     EXPECT_CALL(
         *connection_,
         CloseConnection(QUIC_HTTP_SERVER_INITIATED_BIDIRECTIONAL_STREAM, _, _));
@@ -552,7 +546,7 @@ TEST_P(QuicSpdyClientSessionTest,
 // stored into client session cache.
 TEST_P(QuicSpdyClientSessionTest, OnSettingsFrame) {
   // This feature is HTTP/3 only
-  if (!VersionUsesHttp3(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   CompleteCryptoHandshake();
@@ -587,7 +581,7 @@ TEST_P(QuicSpdyClientSessionTest, OnSettingsFrame) {
 
 TEST_P(QuicSpdyClientSessionTest, IetfZeroRttSetup) {
   // This feature is TLS-only.
-  if (session_->version().UsesQuicCrypto()) {
+  if (!session_->version().IsIetfQuic()) {
     return;
   }
 
@@ -595,7 +589,7 @@ TEST_P(QuicSpdyClientSessionTest, IetfZeroRttSetup) {
 
   CreateConnection();
   // Session configs should be in initial state.
-  if (session_->version().UsesHttp3()) {
+  if (session_->version().IsIetfQuic()) {
     EXPECT_EQ(0u, session_->flow_controller()->send_window_offset());
     EXPECT_EQ(std::numeric_limits<size_t>::max(),
               session_->max_outbound_header_list_size());
@@ -611,7 +605,7 @@ TEST_P(QuicSpdyClientSessionTest, IetfZeroRttSetup) {
   // succeeds.
   EXPECT_EQ(kInitialSessionFlowControlWindowForTest,
             session_->flow_controller()->send_window_offset());
-  if (session_->version().UsesHttp3()) {
+  if (session_->version().IsIetfQuic()) {
     auto* id_manager = QuicSessionPeer::ietf_streamid_manager(session_.get());
     EXPECT_EQ(kDefaultMaxStreamsPerConnection,
               id_manager->max_outgoing_bidirectional_streams());
@@ -644,7 +638,7 @@ TEST_P(QuicSpdyClientSessionTest, IetfZeroRttSetup) {
   EXPECT_TRUE(session_->GetCryptoStream()->IsResumption());
   EXPECT_EQ(kInitialSessionFlowControlWindowForTest + 1,
             session_->flow_controller()->send_window_offset());
-  if (session_->version().UsesHttp3()) {
+  if (session_->version().IsIetfQuic()) {
     auto* id_manager = QuicSessionPeer::ietf_streamid_manager(session_.get());
     auto* control_stream =
         QuicSpdySessionPeer::GetSendControlStream(session_.get());
@@ -664,7 +658,7 @@ TEST_P(QuicSpdyClientSessionTest, IetfZeroRttSetup) {
   EXPECT_CALL(*connection_, CloseConnection(_, _, _)).Times(0);
   // Let the session receive a new SETTINGS frame to complete the second
   // connection.
-  if (session_->version().UsesHttp3()) {
+  if (session_->version().IsIetfQuic()) {
     SettingsFrame settings;
     settings.values[SETTINGS_QPACK_MAX_TABLE_CAPACITY] = 2;
     settings.values[SETTINGS_MAX_FIELD_SECTION_SIZE] = 5;
@@ -676,7 +670,7 @@ TEST_P(QuicSpdyClientSessionTest, IetfZeroRttSetup) {
 // Regression test for b/159168475
 TEST_P(QuicSpdyClientSessionTest, RetransmitDataOnZeroRttReject) {
   // This feature is TLS-only.
-  if (session_->version().UsesQuicCrypto()) {
+  if (!session_->version().IsIetfQuic()) {
     return;
   }
 
@@ -700,7 +694,7 @@ TEST_P(QuicSpdyClientSessionTest, RetransmitDataOnZeroRttReject) {
               OnPacketSent(ENCRYPTION_INITIAL, NOT_RETRANSMISSION));
   EXPECT_CALL(*connection_,
               OnPacketSent(ENCRYPTION_ZERO_RTT, NOT_RETRANSMISSION))
-      .Times(session_->version().UsesHttp3() ? 2 : 1);
+      .Times(session_->version().IsIetfQuic() ? 2 : 1);
   session_->CryptoConnect();
   EXPECT_TRUE(session_->IsEncryptionEstablished());
   EXPECT_EQ(ENCRYPTION_ZERO_RTT, session_->connection()->encryption_level());
@@ -726,7 +720,7 @@ TEST_P(QuicSpdyClientSessionTest, RetransmitDataOnZeroRttReject) {
 // lower than what the client has already used, connection will be closed.
 TEST_P(QuicSpdyClientSessionTest, ZeroRttRejectReducesStreamLimitTooMuch) {
   // This feature is TLS-only.
-  if (session_->version().UsesQuicCrypto()) {
+  if (!session_->version().IsIetfQuic()) {
     return;
   }
 
@@ -743,7 +737,7 @@ TEST_P(QuicSpdyClientSessionTest, ZeroRttRejectReducesStreamLimitTooMuch) {
   QuicSpdyClientStream* stream = session_->CreateOutgoingBidirectionalStream();
   ASSERT_TRUE(stream);
 
-  if (session_->version().UsesHttp3()) {
+  if (session_->version().IsIetfQuic()) {
     EXPECT_CALL(
         *connection_,
         CloseConnection(
@@ -773,7 +767,7 @@ TEST_P(QuicSpdyClientSessionTest, ZeroRttRejectReducesStreamLimitTooMuch) {
 TEST_P(QuicSpdyClientSessionTest,
        ZeroRttRejectReducesStreamFlowControlTooMuch) {
   // This feature is TLS-only.
-  if (session_->version().UsesQuicCrypto()) {
+  if (!session_->version().IsIetfQuic()) {
     return;
   }
 
@@ -793,7 +787,7 @@ TEST_P(QuicSpdyClientSessionTest,
   // Let the stream write more than 1 byte of data.
   stream->WriteOrBufferData("hello", true, nullptr);
 
-  if (session_->version().UsesHttp3()) {
+  if (session_->version().IsIetfQuic()) {
     // Both control stream and the request stream will report errors.
     // Open question: should both streams be closed with the same error code?
     EXPECT_CALL(*connection_, CloseConnection(_, _, _))
@@ -825,7 +819,7 @@ TEST_P(QuicSpdyClientSessionTest,
 TEST_P(QuicSpdyClientSessionTest,
        ZeroRttRejectReducesSessionFlowControlTooMuch) {
   // This feature is TLS-only.
-  if (session_->version().UsesQuicCrypto()) {
+  if (!session_->version().IsIetfQuic()) {
     return;
   }
 
@@ -865,7 +859,7 @@ TEST_P(QuicSpdyClientSessionTest,
 }
 
 TEST_P(QuicSpdyClientSessionTest, BadSettingsInZeroRttResumption) {
-  if (!session_->version().UsesHttp3()) {
+  if (!session_->version().IsIetfQuic()) {
     return;
   }
 
@@ -889,7 +883,7 @@ TEST_P(QuicSpdyClientSessionTest, BadSettingsInZeroRttResumption) {
 }
 
 TEST_P(QuicSpdyClientSessionTest, BadSettingsInZeroRttRejection) {
-  if (!session_->version().UsesHttp3()) {
+  if (!session_->version().IsIetfQuic()) {
     return;
   }
 
@@ -920,7 +914,7 @@ TEST_P(QuicSpdyClientSessionTest, BadSettingsInZeroRttRejection) {
 }
 
 TEST_P(QuicSpdyClientSessionTest, ServerAcceptsZeroRttButOmitSetting) {
-  if (!session_->version().UsesHttp3()) {
+  if (!session_->version().IsIetfQuic()) {
     return;
   }
 

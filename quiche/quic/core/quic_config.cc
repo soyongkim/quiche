@@ -13,21 +13,25 @@
 #include <string>
 #include <utility>
 
-#include "absl/base/attributes.h"
 #include "absl/strings/string_view.h"
 #include "quiche/quic/core/crypto/crypto_handshake_message.h"
 #include "quiche/quic/core/crypto/crypto_protocol.h"
+#include "quiche/quic/core/crypto/transport_parameters.h"
 #include "quiche/quic/core/quic_connection_id.h"
 #include "quiche/quic/core/quic_constants.h"
 #include "quiche/quic/core/quic_error_codes.h"
 #include "quiche/quic/core/quic_socket_address_coder.h"
+#include "quiche/quic/core/quic_tag.h"
+#include "quiche/quic/core/quic_time.h"
 #include "quiche/quic/core/quic_types.h"
-#include "quiche/quic/core/quic_utils.h"
+#include "quiche/quic/core/quic_versions.h"
 #include "quiche/quic/platform/api/quic_bug_tracker.h"
-#include "quiche/quic/platform/api/quic_flag_utils.h"
 #include "quiche/quic/platform/api/quic_flags.h"
 #include "quiche/quic/platform/api/quic_logging.h"
 #include "quiche/quic/platform/api/quic_socket_address.h"
+#include "quiche/common/platform/api/quiche_logging.h"
+#include "quiche/common/quiche_data_writer.h"
+#include "quiche/common/quiche_ip_address_family.h"
 
 namespace quic {
 
@@ -448,7 +452,6 @@ QuicConfig::QuicConfig()
       alternate_server_address_ipv4_(kASAD, PRESENCE_OPTIONAL),
       stateless_reset_token_(kSRST, PRESENCE_OPTIONAL),
       max_ack_delay_ms_(kMAD, PRESENCE_OPTIONAL),
-      min_ack_delay_ms_(0, PRESENCE_OPTIONAL),
       min_ack_delay_ms_draft10_(0, PRESENCE_OPTIONAL),
       ack_delay_exponent_(kADE, PRESENCE_OPTIONAL),
       max_udp_payload_size_(0, PRESENCE_OPTIONAL),
@@ -504,6 +507,14 @@ QuicConfig::GetReceivedGoogleHandshakeMessage() const {
   return received_google_handshake_message_;
 }
 
+void QuicConfig::SetDebuggingSniToSend(const std::string& debugging_sni) {
+  debugging_sni_to_send_ = debugging_sni;
+}
+
+const std::optional<std::string>& QuicConfig::GetReceivedDebuggingSni() const {
+  return received_debugging_sni_;
+}
+
 void QuicConfig::SetDiscardLengthToSend(int32_t discard_length) {
   discard_length_to_send_ = discard_length;
 }
@@ -556,15 +567,15 @@ bool QuicConfig::HasClientRequestedIndependentOption(
 
 const QuicTagVector& QuicConfig::ClientRequestedIndependentOptions(
     Perspective perspective) const {
-  static const QuicTagVector* no_options = new QuicTagVector;
+  static constexpr QuicTagVector no_options;
   if (perspective == Perspective::IS_SERVER) {
     return HasReceivedConnectionOptions() ? ReceivedConnectionOptions()
-                                          : *no_options;
+                                          : no_options;
   }
 
   return client_connection_options_.HasSendValues()
              ? client_connection_options_.GetSendValues()
-             : *no_options;
+             : no_options;
 }
 
 void QuicConfig::SetIdleNetworkTimeout(QuicTime::Delta idle_network_timeout) {
@@ -646,12 +657,12 @@ uint64_t QuicConfig::GetMinAckDelayDraft10ToSendMs() const {
   return min_ack_delay_ms_draft10_.GetSendValue();
 }
 
-bool QuicConfig::HasReceivedMinAckDelayMs() const {
-  return min_ack_delay_ms_.HasReceivedValue();
+bool QuicConfig::HasReceivedMinAckDelayDraft10Ms() const {
+  return min_ack_delay_ms_draft10_.HasReceivedValue();
 }
 
-uint32_t QuicConfig::ReceivedMinAckDelayMs() const {
-  return min_ack_delay_ms_.GetReceivedValue();
+uint32_t QuicConfig::ReceivedMinAckDelayDraft10Ms() const {
+  return min_ack_delay_ms_draft10_.GetReceivedValue();
 }
 
 void QuicConfig::SetAckDelayExponentToSend(uint32_t exponent) {
@@ -1074,7 +1085,7 @@ void QuicConfig::ToHandshakeMessage(
   // as "MIDS" -- the max initial dynamic streams tag -- if
   // doing some version other than IETF QUIC.
   max_bidirectional_streams_.ToHandshakeMessage(out);
-  if (VersionHasIetfQuicFrames(transport_version)) {
+  if (VersionIsIetfQuic(transport_version)) {
     max_unidirectional_streams_.ToHandshakeMessage(out);
     ack_delay_exponent_.ToHandshakeMessage(out);
   }
@@ -1233,10 +1244,6 @@ bool QuicConfig::FillTransportParameters(TransportParameters* params) const {
   params->initial_max_streams_uni.set_value(
       GetMaxUnidirectionalStreamsToSend());
   params->max_ack_delay.set_value(GetMaxAckDelayToSendMs());
-  if (min_ack_delay_ms_.HasSendValue()) {
-    params->min_ack_delay_us.set_value(min_ack_delay_ms_.GetSendValue() *
-                                       kNumMicrosPerMilli);
-  }
   if (min_ack_delay_ms_draft10_.HasSendValue()) {
     params->min_ack_delay_us_draft10 =
         min_ack_delay_ms_draft10_.GetSendValue() * kNumMicrosPerMilli;
@@ -1296,6 +1303,9 @@ bool QuicConfig::FillTransportParameters(TransportParameters* params) const {
 
   if (google_handshake_message_to_send_.has_value()) {
     params->google_handshake_message = google_handshake_message_to_send_;
+  }
+  if (debugging_sni_to_send_.has_value()) {
+    params->debugging_sni = debugging_sni_to_send_;
   }
 
   params->discard_length = discard_length_to_send_;
@@ -1401,22 +1411,6 @@ QuicErrorCode QuicConfig::ProcessTransportParameters(
                 &params.preferred_address->stateless_reset_token.front()));
       }
     }
-    if (params.min_ack_delay_us.value() > 0 &&
-        params.min_ack_delay_us_draft10.has_value()) {
-      *error_details =
-          "Two versions of MinAckDelay. ACK_FREQUENCY frames are "
-          "ambiguous.";
-      return IETF_QUIC_PROTOCOL_VIOLATION;
-    }
-    if (params.min_ack_delay_us.value() != 0) {
-      if (params.min_ack_delay_us.value() >
-          params.max_ack_delay.value() * kNumMicrosPerMilli) {
-        *error_details = "MinAckDelay is greater than MaxAckDelay.";
-        return IETF_QUIC_PROTOCOL_VIOLATION;
-      }
-      min_ack_delay_ms_.SetReceivedValue(params.min_ack_delay_us.value() /
-                                         kNumMicrosPerMilli);
-    }
     if (params.min_ack_delay_us_draft10.has_value()) {
       if (*params.min_ack_delay_us_draft10 >
           params.max_ack_delay.value() * kNumMicrosPerMilli) {
@@ -1456,6 +1450,9 @@ QuicErrorCode QuicConfig::ProcessTransportParameters(
   }
   if (params.google_handshake_message.has_value()) {
     received_google_handshake_message_ = params.google_handshake_message;
+  }
+  if (params.debugging_sni.has_value()) {
+    received_debugging_sni_ = params.debugging_sni;
   }
 
   received_custom_transport_parameters_ = params.custom_parameters;

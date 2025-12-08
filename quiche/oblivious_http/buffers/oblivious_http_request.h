@@ -1,13 +1,15 @@
 #ifndef QUICHE_OBLIVIOUS_HTTP_BUFFERS_OBLIVIOUS_HTTP_REQUEST_H_
 #define QUICHE_OBLIVIOUS_HTTP_BUFFERS_OBLIVIOUS_HTTP_REQUEST_H_
 
-#include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "openssl/hpke.h"
+#include "quiche/common/platform/api/quiche_export.h"
+#include "quiche/common/quiche_data_reader.h"
 #include "quiche/oblivious_http/common/oblivious_http_header_key_config.h"
 
 namespace quiche {
@@ -28,6 +30,8 @@ class QUICHE_EXPORT ObliviousHttpRequest {
     // Movable
     Context(Context&& other) = default;
     Context& operator=(Context&& other) = default;
+
+    std::string GetEncapsulatedKey() const { return encapsulated_key_; }
 
    private:
     explicit Context(bssl::UniquePtr<EVP_HPKE_CTX> hpke_context,
@@ -102,6 +106,30 @@ class QUICHE_EXPORT ObliviousHttpRequest {
   Context ReleaseContext() && {
     return std::move(oblivious_http_request_context_.value());
   }
+
+  // Reads the OHTTP request header from the given `reader`.
+  // On success, attempts to setup and return the Gateway Context.
+  static absl::StatusOr<Context> DecodeEncapsulatedRequestHeader(
+      QuicheDataReader& reader, const EVP_HPKE_KEY& gateway_key,
+      const ObliviousHttpHeaderKeyConfig& ohttp_key_config,
+      absl::string_view request_label);
+
+  // Creates the client's HPKE sender context.
+  static absl::StatusOr<Context> CreateHpkeSenderContext(
+      absl::string_view hpke_public_key,
+      const ObliviousHttpHeaderKeyConfig& ohttp_key_config,
+      absl::string_view seed, absl::string_view request_label);
+
+  // Encrypts a chunk of plaintext. If `is_final_chunk` is true, the chunk will
+  // be encrypted with a final AAD.
+  static absl::StatusOr<std::string> EncryptChunk(
+      absl::string_view plaintext_payload, const Context& context,
+      bool is_final_chunk);
+
+  // Decrypts an encrypted chunk. If `is_final_chunk` is true, the chunk will
+  // be decrypted with a final AAD.
+  static absl::StatusOr<std::string> DecryptChunk(
+      Context& context, absl::string_view encrypted_chunk, bool is_final_chunk);
 
  private:
   explicit ObliviousHttpRequest(

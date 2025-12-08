@@ -14,6 +14,7 @@
 #include "quiche/http2/test_tools/http2_random.h"
 #include "quiche/http2/test_tools/random_decoder_test_base.h"
 #include "quiche/common/platform/api/quiche_expect_bug.h"
+#include "quiche/common/platform/api/quiche_flags.h"
 #include "quiche/common/platform/api/quiche_test.h"
 
 namespace http2 {
@@ -80,6 +81,14 @@ TEST_F(HpackEntryDecoderTest, IndexedHeader_Literals) {
         DecodeAndValidateSeveralWays(&b, ValidateDoneAndEmpty(do_check)));
     EXPECT_TRUE(do_check());
   }
+  collector_.Clear();
+
+  const char input[] = {
+      '\xff', '\x92', '\xff', '\xff', '\xff', '\xff',
+      '\xff', '\xff', '\xff', '\xff', '\x00'};  // == Index 2^63 + 17 ==
+    DecodeBuffer b(input);
+    EXPECT_TRUE(DecodeAndValidateSeveralWays(&b, ValidateError()));
+    EXPECT_EQ(decoder_.error(), HpackDecodingError::kIndexVarintError);
 }
 
 TEST_F(HpackEntryDecoderTest, IndexedHeader_Various) {

@@ -62,6 +62,12 @@ const char* BalsaFrameEnums::ErrorCodeToString(
       return "INVALID_WS_IN_STATUS_LINE";
     case INVALID_WS_IN_REQUEST_LINE:
       return "INVALID_WS_IN_REQUEST_LINE";
+    case MULTIPLE_SPACES_IN_STATUS_LINE:
+      return "MULTIPLE_SPACES_IN_STATUS_LINE";
+    case MULTIPLE_SPACES_IN_REQUEST_LINE:
+      return "MULTIPLE_SPACES_IN_REQUEST_LINE";
+    case OBS_FOLD_IN_HEADERS:
+      return "OBS_FOLD_IN_HEADERS";
     case FAILED_CONVERTING_STATUS_CODE_TO_INT:
       return "FAILED_CONVERTING_STATUS_CODE_TO_INT";
     case INVALID_TARGET_URI:
@@ -82,6 +88,8 @@ const char* BalsaFrameEnums::ErrorCodeToString(
       return "CHUNK_LENGTH_OVERFLOW";
     case INVALID_CHUNK_EXTENSION:
       return "INVALID_CHUNK_EXTENSION";
+    case INVALID_CHUNK_FRAMING:
+      return "INVALID_CHUNK_FRAMING";
     case CALLED_BYTES_SPLICED_WHEN_UNSAFE_TO_DO_SO:
       return "CALLED_BYTES_SPLICED_WHEN_UNSAFE_TO_DO_SO";
     case CALLED_BYTES_SPLICED_AND_EXCEEDED_SAFE_SPLICE_AMOUNT:
@@ -108,6 +116,8 @@ const char* BalsaFrameEnums::ErrorCodeToString(
       return "TRAILER_TOO_LONG";
     case TRAILER_MISSING_COLON:
       return "TRAILER_MISSING_COLON";
+    case OBS_FOLD_IN_TRAILERS:
+      return "OBS_FOLD_IN_TRAILERS";
     case INTERNAL_LOGIC_ERROR:
       return "INTERNAL_LOGIC_ERROR";
     case INVALID_HEADER_CHARACTER:
@@ -118,6 +128,9 @@ const char* BalsaFrameEnums::ErrorCodeToString(
       return "INVALID_TRAILER_NAME_CHARACTER";
     case UNSUPPORTED_100_CONTINUE:
       return "UNSUPPORTED_100_CONTINUE";
+    case INVALID_REQUEST_METHOD:
+      return "INVALID_REQUEST_METHOD";
+    // This should be the last case in the switch statement.
     case NUM_ERROR_CODES:
       return "UNKNOWN_ERROR";
   }
