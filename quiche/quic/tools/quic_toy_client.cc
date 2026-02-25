@@ -1428,6 +1428,20 @@ int QuicToyClient::SendRequestsAndPrintResponses(
       }
       
       // Check final result after all redirects
+      
+      // Check if client is nullptr (failed to create during redirect)
+      if (client == nullptr) {
+        std::cerr << "Client creation failed during redirect. Stopping." << std::endl;
+        
+        // Log DNS/creation failure to CSV and stop all iterations
+        std::string csv_filename = quiche::GetQuicheCommandLineFlag(FLAGS_save_csv);
+        if (!csv_filename.empty()) {
+          AppendErrorToCsv(csv_filename, host, "DNS_LOOKUP_FAILED");
+        }
+        
+        return 1;  // DNS/creation failure stops all iterations
+      }
+      
       if (redirect_count >= max_redirects) {
         std::cout << "Too many redirects (" << max_redirects << "). Stopping." << std::endl;
         

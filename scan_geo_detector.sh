@@ -185,12 +185,12 @@ echo "Workers completed: $COMPLETED / ${#WORKER_PIDS[@]}"
 [[ $FAILED -gt 0 ]] && echo "Workers with errors: $FAILED (check logs for details)"
 echo ""
 
-# Merge CSV files
+# Merge CSV files (sort numerically to ensure correct order)
 MERGED_CSV="${WORK_DIR}/merged_results.csv"
 echo "Merging CSV results into: $MERGED_CSV"
 
 FIRST_FILE=true
-for CSV_FILE in "${WORK_DIR}"/worker_*.csv; do
+for CSV_FILE in $(ls "${WORK_DIR}"/worker_*.csv 2>/dev/null | sort -V); do
   if [[ ! -f "$CSV_FILE" ]]; then
     continue
   fi
@@ -212,6 +212,28 @@ if [[ -f "$MERGED_CSV" ]]; then
   echo ""
   echo "Results saved to: $MERGED_CSV"
   
+  # Check for missing domains
+  echo ""
+  echo "Checking for missing domains..."
+  MISSING_DOMAINS="${WORK_DIR}/missing_domains.txt"
+  
+  # Get unique domains from merged CSV (skip header)
+  tail -n +2 "$MERGED_CSV" | cut -d',' -f1 | sort -u > "${WORK_DIR}/scanned_domains.tmp"
+  
+  # Compare with input file to find missing domains
+  comm -23 <(sort "$INPUT_FILE") "${WORK_DIR}/scanned_domains.tmp" > "$MISSING_DOMAINS"
+  
+  MISSING_COUNT=$(wc -l < "$MISSING_DOMAINS")
+  if [[ $MISSING_COUNT -gt 0 ]]; then
+    echo "⚠️  Found $MISSING_COUNT missing domains (saved to: $MISSING_DOMAINS)"
+  else
+    echo "✓ All domains scanned successfully (no missing domains)"
+    rm -f "$MISSING_DOMAINS"
+  fi
+  
+  # Cleanup temporary file
+  rm -f "${WORK_DIR}/scanned_domains.tmp"
+  
   # Cleanup temporary files
   echo ""
   echo "Cleaning up temporary files..."
@@ -224,6 +246,7 @@ if [[ -f "$MERGED_CSV" ]]; then
   echo "=== Summary ==="
   echo "CSV file: $MERGED_CSV"
   echo "HTML files: ${WORK_DIR}/html/ ($([[ "$SAVE_HTML" == "true" ]] && find "${WORK_DIR}/html" -name "*.html" -type f 2>/dev/null | wc -l || echo 0) files)"
+  [[ -f "${WORK_DIR}/missing_domains.txt" ]] && echo "Missing domains: ${WORK_DIR}/missing_domains.txt"
 else
   echo "Warning: No results to merge"
 fi
