@@ -248,6 +248,13 @@ class QUICHE_EXPORT QuicSession
       return config_->IdleNetworkTimeout();
     }
 
+    bool DisableConnectionMigration() const {
+      if (delete_config_ && config_ == nullptr) {
+        return disable_connection_migration_;
+      }
+      return config_->DisableConnectionMigration();
+    }
+
    private:
     std::unique_ptr<QuicConfig> config_;
     // TODO(b/461482627): Delete this when retiring the flag.
@@ -271,6 +278,7 @@ class QUICHE_EXPORT QuicSession
     uint64_t get_initial_max_stream_data_bytes_incoming_bidirectional_to_send_;
     uint64_t received_max_bidirectional_streams_;
     QuicTime::Delta idle_network_timeout_ = QuicTime::Delta::Zero();
+    bool disable_connection_migration_ = false;
   };
 
   // Does not take ownership of |connection| or |visitor|.

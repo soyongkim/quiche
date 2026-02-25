@@ -150,6 +150,7 @@ void QuicSession::SavedConfig::DeleteConfig(ParsedQuicVersion version) {
   received_max_bidirectional_streams_ =
       config_->ReceivedMaxBidirectionalStreams();
   idle_network_timeout_ = config_->IdleNetworkTimeout();
+  disable_connection_migration_ = config_->DisableConnectionMigration();
   config_.reset();
 }
 
@@ -2062,7 +2063,7 @@ QuicErrorCode QuicSession::ProcessTransportParameters(
 }
 
 bool QuicSession::IsDisableConnectionMigration() {
-  return config()->DisableConnectionMigration();
+  return saved_config_.DisableConnectionMigration();
 }
 
 

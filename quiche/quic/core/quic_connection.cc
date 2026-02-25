@@ -2485,8 +2485,8 @@ size_t QuicConnection::SendCryptoData(EncryptionLevel level,
     QUIC_BUG(quic_bug_10511_18) << "Attempt to send empty crypto frame";
     return 0;
   }
-  std::cout << "[quic_connection] SendCryptoData: " << write_length
-            << " bytes of crypto data" << std::endl;
+  // std::cout << "[quic_connection] SendCryptoData: " << write_length
+  //           << " bytes of crypto data" << std::endl;
   ScopedPacketFlusher flusher(this);
   return packet_creator_.ConsumeCryptoData(level, write_length, offset);
 }
