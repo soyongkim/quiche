@@ -274,7 +274,7 @@ Script DetectScript(uint32_t codepoint) {
   if (codepoint >= 0x0600 && codepoint <= 0x06FF) return Script::Arabic;
   if (codepoint >= 0x0900 && codepoint <= 0x097F) return Script::Devanagari;
   if (codepoint >= 0x0E00 && codepoint <= 0x0E7F) return Script::Thai;
-  if (codepoint >= 0x3040 && codepoint <= 0x309F || codepoint >= 0x30A0 && codepoint <= 0x30FF) return Script::Japanese;
+  if ((codepoint >= 0x3040 && codepoint <= 0x309F) || (codepoint >= 0x30A0 && codepoint <= 0x30FF)) return Script::Japanese;
   if (codepoint >= 0xAC00 && codepoint <= 0xD7AF) return Script::Hangul;
   if (codepoint >= 0x4E00 && codepoint <= 0x9FFF) return Script::Han;
   return Script::Unknown;
@@ -596,6 +596,7 @@ void AppendScanResultToCsv(const std::string& csv_filename,
                            const std::string& redirected_domain,
                            const std::string& redirect_ip,
                            int status,
+                           bool disable_conn_migration,
                            const std::string& declared_lang,
                            const std::string& detected_unicode,
                            size_t html_size,
@@ -612,7 +613,7 @@ void AppendScanResultToCsv(const std::string& csv_filename,
   }
 
   if (write_header) {
-    csv_file << "domain,ip,redirected_domain,redirect_ip,status,declared_lang,detected_unicode,html_size,total_time_ms,frequency_vector\n";
+    csv_file << "domain,ip,redirected_domain,redirect_ip,status,disable_conn_migration,declared_lang,detected_unicode,html_size,total_time_ms,frequency_vector\n";
   }
 
   // Build frequency vector (e.g., "div:2|style:343|svg:343")
@@ -647,6 +648,7 @@ void AppendScanResultToCsv(const std::string& csv_filename,
            << escape_csv(redirected_domain) << ","
            << escape_csv(redirect_ip) << ","
            << status << ","
+           << (disable_conn_migration ? "true" : "false") << ","
            << escape_csv(declared_lang) << ","
            << escape_csv(detected_unicode) << ","
            << html_size << ","
@@ -672,7 +674,7 @@ void AppendErrorToCsv(const std::string& csv_filename,
   }
 
   if (write_header) {
-    csv_file << "domain,ip,redirected_domain,redirect_ip,status,declared_lang,detected_unicode,html_size,total_time_ms,frequency_vector\n";
+    csv_file << "domain,ip,redirected_domain,redirect_ip,status,disable_conn_migration,declared_lang,detected_unicode,html_size,total_time_ms,frequency_vector\n";
   }
 
   // Escape helper for CSV fields
@@ -695,6 +697,7 @@ void AppendErrorToCsv(const std::string& csv_filename,
            << ","  // redirected_domain
            << ","  // redirect_ip
            << escape_csv(error_message) << ","  // status (error message)
+           << "false,"  // disable_conn_migration (not applicable for errors)
            << ","  // declared_lang
            << ","  // detected_unicode
            << "0,"  // html_size
@@ -808,6 +811,7 @@ struct ResponseResult {
   std::string redirected_domain;
   std::string redirect_ip;
   int status_code = 0;
+  bool disable_conn_migration = false;
   std::string response_body;
   std::string response_headers;
   QuicTime::Delta ttfb = QuicTime::Delta::Zero();
@@ -904,19 +908,18 @@ void ProcessAndSaveErrorResponse(const ResponseResult& result, bool is_quiet,
     DisplayErrorAnalysis(result);
   }
   
-  // Always save CSV if flag is set and response body exists (independent of quiet mode)
-  if (result.response_body.size() > 0) {
-    std::string csv_filename = quiche::GetQuicheCommandLineFlag(FLAGS_save_csv);
-    if (!csv_filename.empty()) {
-      ScriptDetectionResult script_result = DetectScripts(
-          result.response_headers, result.response_body);
-      AppendScanResultToCsv(csv_filename, result.domain, result.original_ip,
-                            result.redirected_domain, result.redirect_ip,
-                            result.status_code, script_result.declared_language,
-                            script_result.body_primary_script, result.response_body.size(),
-                            result.ttlb.ToMilliseconds(),
-                            script_result.html_element_counts);
-    }
+  // Always save CSV if flag is set (independent of quiet mode and body size)
+  std::string csv_filename = quiche::GetQuicheCommandLineFlag(FLAGS_save_csv);
+  if (!csv_filename.empty()) {
+    ScriptDetectionResult script_result = DetectScripts(
+        result.response_headers, result.response_body);
+    AppendScanResultToCsv(csv_filename, result.domain, result.original_ip,
+                          result.redirected_domain, result.redirect_ip,
+                          result.status_code, result.disable_conn_migration,
+                          script_result.declared_language,
+                          script_result.body_primary_script, result.response_body.size(),
+                          result.ttlb.ToMilliseconds(),
+                          script_result.html_element_counts);
   }
 }
 
@@ -940,7 +943,8 @@ void ProcessAndSaveResponse(const ResponseResult& result,
         result.response_headers, result.response_body);
     AppendScanResultToCsv(csv_filename, result.domain, result.original_ip,
                           result.redirected_domain, result.redirect_ip,
-                          result.status_code, script_result.declared_language,
+                          result.status_code, result.disable_conn_migration,
+                          script_result.declared_language,
                           script_result.body_primary_script, result.response_body.size(),
                           result.ttlb.ToMilliseconds(),
                           script_result.html_element_counts);
@@ -1211,9 +1215,6 @@ int QuicToyClient::SendRequestsAndPrintResponses(
 
   // Make sure to store the response, for later output.
   client->set_store_response(true);
-
-  // [SD] Test
-  client->WaitForHandshakeConfirmed();
   
   for (int i = 0; i < num_requests; ++i) {
     // Print request details before sending.
@@ -1247,20 +1248,19 @@ int QuicToyClient::SendRequestsAndPrintResponses(
 
     }
 
+    // Check if QUIC connection failed (no response received)
     if (!client->connected()) {
       std::string error_code = quic::QuicErrorCodeToString(client->session()->error());
       std::string error_msg = error_code + " " + client->session()->error_details();
       std::cerr << "Request caused connection failure. Error: " << error_msg << std::endl;
       
-      // Log error to CSV if enabled (only error code, not details)
+      // Log QUIC error to CSV and stop all iterations
       std::string csv_filename = quiche::GetQuicheCommandLineFlag(FLAGS_save_csv);
       if (!csv_filename.empty()) {
         AppendErrorToCsv(csv_filename, host, error_code);
       }
       
-      if (!quiche::GetQuicheCommandLineFlag(FLAGS_ignore_errors)) {
-        return 1;
-      }
+      return 1;  // QUIC error stops all iterations
     }
 
     int response_code = client->latest_response_code();
@@ -1273,6 +1273,7 @@ int QuicToyClient::SendRequestsAndPrintResponses(
       result.redirected_domain = "";
       result.redirect_ip = "";
       result.status_code = response_code;
+      result.disable_conn_migration = client->session()->IsDisableConnectionMigration();
       result.response_body = client->latest_response_body();
       result.response_headers = client->latest_response_headers();
       result.ttfb = client->latest_ttfb();
@@ -1299,14 +1300,22 @@ int QuicToyClient::SendRequestsAndPrintResponses(
             std::cout << "Redirect #" << redirect_count << " (" << response_code << ") to: " << location << std::endl;
             
             // Handle relative URLs
-            if (location.length() > 0 && location[0] == '/') {
+            if (location.length() > 0 && 
+                location.find("http://") != 0 && location.find("https://") != 0) {
               // Relative URL - use current scheme and authority  
               auto scheme_it = header_block.find(":scheme");
               auto authority_it = header_block.find(":authority");
               if (scheme_it != header_block.end() && authority_it != header_block.end()) {
                 std::string current_scheme = std::string(scheme_it->second);
                 std::string current_authority = std::string(authority_it->second);
-                location = current_scheme + "://" + current_authority + location;
+                
+                if (location[0] == '/') {
+                  // Path starting with / (e.g., "/en")
+                  location = current_scheme + "://" + current_authority + location;
+                } else {
+                  // Path without leading / (e.g., "en")
+                  location = current_scheme + "://" + current_authority + "/" + location;
+                }
                 std::cout << "Relative URL converted to: " << location << std::endl;
               }
             }
@@ -1373,11 +1382,18 @@ int QuicToyClient::SendRequestsAndPrintResponses(
               
               if (!client->Connect()) {
                 quic::QuicErrorCode error = client->session()->error();
+                std::string error_code = quic::QuicErrorCodeToString(error);
+                std::string error_msg = error_code + " " + client->session()->error_details();
                 std::cerr << "Failed to connect to redirected host " << redirect_url.host() 
-                          << ":" << redirect_port << ". " 
-                          << quic::QuicErrorCodeToString(error) << " "
-                          << client->session()->error_details() << std::endl;
-                break;
+                          << ":" << redirect_port << ". " << error_msg << std::endl;
+                
+                // Log QUIC error to CSV and stop all iterations
+                std::string csv_filename = quiche::GetQuicheCommandLineFlag(FLAGS_save_csv);
+                if (!csv_filename.empty()) {
+                  AppendErrorToCsv(csv_filename, host, error_code);
+                }
+                
+                return 1;  // QUIC error during redirect stops all iterations
               }
               
               // Set up interim headers callback for redirected host
@@ -1387,9 +1403,6 @@ int QuicToyClient::SendRequestsAndPrintResponses(
                     // Handle interim/preliminary headers (e.g., HTTP 103 Early Hints)
                     // Just acknowledge them without special processing
                   });
-              
-              // Wait for handshake
-              client->WaitForHandshakeConfirmed();
               
               // Update current_host
               current_host = redirect_url.host();
@@ -1417,6 +1430,14 @@ int QuicToyClient::SendRequestsAndPrintResponses(
       // Check final result after all redirects
       if (redirect_count >= max_redirects) {
         std::cout << "Too many redirects (" << max_redirects << "). Stopping." << std::endl;
+        
+        // Log to CSV and stop all iterations
+        std::string csv_filename = quiche::GetQuicheCommandLineFlag(FLAGS_save_csv);
+        if (!csv_filename.empty()) {
+          AppendErrorToCsv(csv_filename, host, "TOO_MANY_REDIRECTS");
+        }
+        
+        return 1;  // TOO_MANY_REDIRECTS stops all iterations
       } else if (response_code >= 200 && response_code < 300) {
         std::cout << "Redirect chain followed successfully. Final response (" << response_code << ") after " << redirect_count << " redirects." << std::endl;
         
@@ -1426,6 +1447,7 @@ int QuicToyClient::SendRequestsAndPrintResponses(
         result.redirected_domain = current_host;
         result.redirect_ip = client->server_address().host().ToString();
         result.status_code = response_code;
+        result.disable_conn_migration = client->session()->IsDisableConnectionMigration();
         result.response_body = client->latest_response_body();
         result.response_headers = client->latest_response_headers();
         result.ttfb = client->latest_ttfb();
@@ -1434,10 +1456,10 @@ int QuicToyClient::SendRequestsAndPrintResponses(
         ProcessAndSaveResponse(result, client.get(), host,
                               quiche::GetQuicheCommandLineFlag(FLAGS_quiet),
                               i + 1, num_requests);
-      } else if (response_code >= 300 && response_code < 400) {
-        std::cout << "Redirect chain incomplete. Still getting redirect (" << response_code << ") after " << redirect_count << " redirects." << std::endl;
       } else {
-        std::cout << "Redirect chain failed with response code (" << response_code << ") after " << redirect_count << " redirects." << std::endl;
+        // Any other response code (including 3xx incomplete, 4xx, 5xx, etc.)
+        // Save to CSV and continue to next iteration
+        std::cout << "Received response (" << response_code << ") after " << redirect_count << " redirects." << std::endl;
         
         ResponseResult result;
         result.domain = host;
@@ -1445,27 +1467,19 @@ int QuicToyClient::SendRequestsAndPrintResponses(
         result.redirected_domain = current_host;
         result.redirect_ip = client->server_address().host().ToString();
         result.status_code = response_code;
+        result.disable_conn_migration = client->session()->IsDisableConnectionMigration();
         result.response_body = client->latest_response_body();
         result.response_headers = client->latest_response_headers();
         result.ttfb = client->latest_ttfb();
         result.ttlb = client->latest_ttlb();
         
-        ProcessAndSaveErrorResponse(result, quiche::GetQuicheCommandLineFlag(FLAGS_quiet),
-                                    i + 1, num_requests);
-      }
-      
-      if (quiche::GetQuicheCommandLineFlag(FLAGS_redirect_is_success)) {
-        std::cout << "Request succeeded (redirect " << response_code << ")."
-                  << std::endl;
-      } else {
-        std::cout << "Request failed (redirect " << response_code << ")."
-                  << std::endl;
-        if (!quiche::GetQuicheCommandLineFlag(FLAGS_ignore_errors)) {
-          return 1;
-        }
+        ProcessAndSaveResponse(result, client.get(), host,
+                              quiche::GetQuicheCommandLineFlag(FLAGS_quiet),
+                              i + 1, num_requests);
       }
     } else {
-      std::cout << "Request failed (" << response_code << ")." << std::endl;
+      // Non-2xx, Non-3xx response (4xx, 5xx, etc.) - save and continue
+      std::cout << "Received response (" << response_code << ")." << std::endl;
       
       ResponseResult result;
       result.domain = host;
@@ -1473,17 +1487,15 @@ int QuicToyClient::SendRequestsAndPrintResponses(
       result.redirected_domain = "";
       result.redirect_ip = "";
       result.status_code = response_code;
+      result.disable_conn_migration = client->session()->IsDisableConnectionMigration();
       result.response_body = client->latest_response_body();
       result.response_headers = client->latest_response_headers();
       result.ttfb = client->latest_ttfb();
       result.ttlb = client->latest_ttlb();
       
-      ProcessAndSaveErrorResponse(result, quiche::GetQuicheCommandLineFlag(FLAGS_quiet),
-                                  i + 1, num_requests);
-      
-      if (!quiche::GetQuicheCommandLineFlag(FLAGS_ignore_errors)) {
-        return 1;
-      }
+      ProcessAndSaveResponse(result, client.get(), host,
+                            quiche::GetQuicheCommandLineFlag(FLAGS_quiet),
+                            i + 1, num_requests);
     }
 
     if (i + 1 < num_requests) {  // There are more requests to perform.
@@ -1498,9 +1510,7 @@ int QuicToyClient::SendRequestsAndPrintResponses(
         if (!client->Connect()) {
           std::cerr << "Failed to reconnect client between requests."
                     << std::endl;
-          if (!quiche::GetQuicheCommandLineFlag(FLAGS_ignore_errors)) {
-            return 1;
-          }
+          return 1;  // QUIC error stops all iterations
         }
       } else if (!quiche::GetQuicheCommandLineFlag(
                      FLAGS_disable_port_changes)) {

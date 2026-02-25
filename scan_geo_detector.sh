@@ -112,7 +112,6 @@ process_part() {
   local CPU_CORE=$3
   
   local CSV_FILE="${WORK_DIR}/worker_${WORKER_NUM}.csv"
-  local LOG_FILE="${WORK_DIR}/worker_${WORKER_NUM}.log"
   
   # Build quic_client options
   local QUIC_OPTS=""
@@ -125,17 +124,17 @@ process_part() {
     # Skip empty lines and comments
     [[ -z "$domain" || "$domain" =~ ^[[:space:]]*# ]] && continue
     
-    # Build command for this domain
-    local CMD="./quic_client.sh --url=$domain --save-csv=$CSV_FILE --num-requests=$NUM_REQUESTS $QUIC_OPTS"
+    # Build command for this domain (with --disable-port-changes for multiple requests)
+    local CMD="./quic_client.sh --url=$domain --save-csv=$CSV_FILE --num-requests=$NUM_REQUESTS --disable-port-changes $QUIC_OPTS"
     
     # Add HTML saving if enabled
     if [[ "$SAVE_HTML" == "true" ]]; then
       CMD="$CMD --save-html=${WORK_DIR}/html/${domain}.html"
     fi
     
-    # Execute with error handling
-    if ! $CMD >> "$LOG_FILE" 2>&1; then
-      echo "[Worker $WORKER_NUM] Failed to scan: $domain" | tee -a "$LOG_FILE"
+    # Execute with error handling (suppress output)
+    if ! $CMD > /dev/null 2>&1; then
+      echo "[Worker $WORKER_NUM] Failed to scan: $domain"
     fi
     
     ((PROCESSED++))
@@ -150,10 +149,10 @@ export WORK_DIR INTERFACE NUM_REQUESTS SAVE_HTML QUIET
 # Launch workers with CPU affinity
 echo "Launching $PARTS_CREATED workers..."
 WORKER_PIDS=()
-WORKER_NUM=1
+WORKER_NUM=0
 
 for PART_FILE in "${WORK_DIR}"/part_*; do
-  CPU_CORE=$(( (WORKER_NUM - 1) % $(nproc) ))
+  CPU_CORE=$(( WORKER_NUM % $(nproc) ))
   
   echo "Starting Worker $WORKER_NUM on CPU core $CPU_CORE (processing $(basename $PART_FILE))..."
   
@@ -213,12 +212,18 @@ if [[ -f "$MERGED_CSV" ]]; then
   echo ""
   echo "Results saved to: $MERGED_CSV"
   
+  # Cleanup temporary files
+  echo ""
+  echo "Cleaning up temporary files..."
+  rm -f "${WORK_DIR}"/part_*
+  rm -f "${WORK_DIR}"/worker_*.csv
+  echo "Removed part_* and worker_*.csv files"
+  
   # Show summary statistics
   echo ""
   echo "=== Summary ==="
   echo "CSV file: $MERGED_CSV"
   echo "HTML files: ${WORK_DIR}/html/ ($([[ "$SAVE_HTML" == "true" ]] && find "${WORK_DIR}/html" -name "*.html" -type f 2>/dev/null | wc -l || echo 0) files)"
-  echo "Log files: ${WORK_DIR}/worker_*.log"
 else
   echo "Warning: No results to merge"
 fi
