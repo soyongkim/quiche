@@ -629,31 +629,37 @@ void AppendScanResultToCsv(const std::string& csv_filename,
     }
   }
 
-  // Escape helper for CSV fields
-  auto escape_csv = [](const std::string& s) {
-    if (s.find(',') != std::string::npos || s.find('"') != std::string::npos || s.find('\n') != std::string::npos) {
+
+  // Sanitize and escape helper for CSV fields (removes embedded NULs)
+  auto sanitize_and_escape_csv = [](const std::string& s) {
+    std::string clean;
+    clean.reserve(s.size());
+    for (char c : s) {
+      if (c != '\0') clean += c;
+    }
+    if (clean.find(',') != std::string::npos || clean.find('"') != std::string::npos || clean.find('\n') != std::string::npos) {
       std::string escaped = "\"";
-      for (char c : s) {
+      for (char c : clean) {
         if (c == '"') escaped += "\"\"";
         else escaped += c;
       }
       escaped += "\"";
       return escaped;
     }
-    return s;
+    return clean;
   };
 
-  csv_file << escape_csv(domain) << ","
-           << escape_csv(ip) << ","
-           << escape_csv(redirected_domain) << ","
-           << escape_csv(redirect_ip) << ","
+  csv_file << sanitize_and_escape_csv(domain) << ","
+           << sanitize_and_escape_csv(ip) << ","
+           << sanitize_and_escape_csv(redirected_domain) << ","
+           << sanitize_and_escape_csv(redirect_ip) << ","
            << status << ","
            << (disable_conn_migration ? "true" : "false") << ","
-           << escape_csv(declared_lang) << ","
-           << escape_csv(detected_unicode) << ","
+           << sanitize_and_escape_csv(declared_lang) << ","
+           << sanitize_and_escape_csv(detected_unicode) << ","
            << html_size << ","
            << total_time_ms << ","
-           << escape_csv(frequency_vector) << "\n";
+           << sanitize_and_escape_csv(frequency_vector) << "\n";
   
   csv_file.close();
   std::cout << "Saved scan result to CSV: " << csv_filename << std::endl;
@@ -677,26 +683,32 @@ void AppendErrorToCsv(const std::string& csv_filename,
     csv_file << "domain,ip,redirected_domain,redirect_ip,status,disable_conn_migration,declared_lang,detected_unicode,html_size,total_time_ms,frequency_vector\n";
   }
 
-  // Escape helper for CSV fields
-  auto escape_csv = [](const std::string& s) {
-    if (s.find(',') != std::string::npos || s.find('"') != std::string::npos || s.find('\n') != std::string::npos) {
+
+  // Sanitize and escape helper for CSV fields (removes embedded NULs)
+  auto sanitize_and_escape_csv = [](const std::string& s) {
+    std::string clean;
+    clean.reserve(s.size());
+    for (char c : s) {
+      if (c != '\0') clean += c;
+    }
+    if (clean.find(',') != std::string::npos || clean.find('"') != std::string::npos || clean.find('\n') != std::string::npos) {
       std::string escaped = "\"";
-      for (char c : s) {
+      for (char c : clean) {
         if (c == '"') escaped += "\"\"";
         else escaped += c;
       }
       escaped += "\"";
       return escaped;
     }
-    return s;
+    return clean;
   };
 
   // Write row with domain and error message as status, other fields empty
-  csv_file << escape_csv(domain) << ","
+  csv_file << sanitize_and_escape_csv(domain) << ","
            << ","  // ip
            << ","  // redirected_domain
            << ","  // redirect_ip
-           << escape_csv(error_message) << ","  // status (error message)
+           << sanitize_and_escape_csv(error_message) << ","  // status (error message)
            << "false,"  // disable_conn_migration (not applicable for errors)
            << ","  // declared_lang
            << ","  // detected_unicode
