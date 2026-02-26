@@ -59,3 +59,5 @@ build_deploy.sh
 # Ignore output files
 *.csv
 *.txt
+
+scan_results/
