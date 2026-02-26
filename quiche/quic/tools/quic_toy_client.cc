@@ -891,38 +891,6 @@ void DisplayErrorAnalysis(const ResponseResult& result) {
   std::cout << "total received bytes: " << result.response_body.size() << std::endl;
 }
 
-// Process and save error response (for failed requests)
-void ProcessAndSaveErrorResponse(const ResponseResult& result, bool is_quiet,
-                                int request_number = 0,
-                                int total_requests = 1) {
-  // Always save HTML if flag is set and response body exists (independent of quiet mode)
-  if (result.response_body.size() > 0) {
-    std::string html_filename = quiche::GetQuicheCommandLineFlag(FLAGS_save_html);
-    if (!html_filename.empty()) {
-      SaveHtmlToFile(html_filename, result.response_body, request_number, total_requests);
-    }
-  }
-  
-  // Display error analysis if not quiet
-  if (!is_quiet) {
-    DisplayErrorAnalysis(result);
-  }
-  
-  // Always save CSV if flag is set (independent of quiet mode and body size)
-  std::string csv_filename = quiche::GetQuicheCommandLineFlag(FLAGS_save_csv);
-  if (!csv_filename.empty()) {
-    ScriptDetectionResult script_result = DetectScripts(
-        result.response_headers, result.response_body);
-    AppendScanResultToCsv(csv_filename, result.domain, result.original_ip,
-                          result.redirected_domain, result.redirect_ip,
-                          result.status_code, result.disable_conn_migration,
-                          script_result.declared_language,
-                          script_result.body_primary_script, result.response_body.size(),
-                          result.ttlb.ToMilliseconds(),
-                          script_result.html_element_counts);
-  }
-}
-
 // Unified response processing: save HTML, save CSV, display analysis
 void ProcessAndSaveResponse(const ResponseResult& result, 
                             QuicSpdyClientBase* client,
@@ -1058,6 +1026,12 @@ int QuicToyClient::SendRequestsAndPrintResponses(
 
   if (client == nullptr) {
     std::cerr << "Failed to create client." << std::endl;
+    
+    std::string csv_filename = quiche::GetQuicheCommandLineFlag(FLAGS_save_csv);
+    if (!csv_filename.empty()) {
+      AppendErrorToCsv(csv_filename, host, "DNS_LOOKUP_FAILED");
+    }
+    
     return 1;
   }
 
