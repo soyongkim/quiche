@@ -94,6 +94,11 @@ fi
 echo "Working directory: $WORK_DIR"
 echo ""
 
+START_TIME=$(date +%s)
+START_HUMAN=$(date '+%Y-%m-%d %H:%M:%S')
+echo "Scan started at: $START_HUMAN"
+echo ""
+
 # Split input file into parts
 echo "Splitting input file into $PARALLEL parts..."
 LINES_PER_PART=$(( (TOTAL_DOMAINS + PARALLEL - 1) / PARALLEL ))
@@ -250,6 +255,21 @@ if [[ -f "$MERGED_CSV" ]]; then
 else
   echo "Warning: No results to merge"
 fi
+
+
+
+END_TIME=$(date +%s)
+END_HUMAN=$(date '+%Y-%m-%d %H:%M:%S')
+DURATION=$(( END_TIME - START_TIME ))
+
+HOURS=$(( DURATION / 3600 ))
+MINUTES=$(( (DURATION % 3600) / 60 ))
+SECONDS=$(( DURATION % 60 ))
+
+echo ""
+echo "Scan completed at: $END_HUMAN"
+echo "Total duration: ${HOURS}h ${MINUTES}m ${SECONDS}s"
+
 
 echo ""
 echo "Scan complete!"

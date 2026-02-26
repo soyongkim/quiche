@@ -61,3 +61,7 @@ build_deploy.sh
 *.txt
 
 scan_results/
+
+MODULE.bazel.lock
+
+tmp/
