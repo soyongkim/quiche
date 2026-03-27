@@ -123,6 +123,23 @@ void QuicSpdyClientStream::OnInitialHeadersComplete(
 
   ConsumeHeaderList();
   QUIC_DVLOG(1) << "headers complete for stream " << id();
+
+  for (const std::pair<std::string, std::string>& pair : header_list) {
+    const std::string& name = pair.first;
+    if (name == "host") {
+      continue;
+    }
+
+    std::cout << "[quic_spdy_client_stream] OnHeadersFrameReceived" << std::endl;
+    if (name == ":status") {
+      std::cout << "[quic_spdy_client_stream] Headers " << name << " " << pair.second << std::endl;
+      break;
+    }
+    //std::cout << "[SD] Header: " << name << ": " << pair.second << std::endl;
+  }
+
+  // If the headers frame received, call the session to notify it for connection migration
+  session()->OnConnectionMigrationNeeded();
 }
 
 void QuicSpdyClientStream::OnTrailingHeadersComplete(

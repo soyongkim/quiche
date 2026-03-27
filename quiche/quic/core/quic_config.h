@@ -9,13 +9,18 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include "quiche/quic/core/crypto/transport_parameters.h"
 #include "quiche/quic/core/quic_connection_id.h"
-#include "quiche/quic/core/quic_packets.h"
+#include "quiche/quic/core/quic_error_codes.h"
+#include "quiche/quic/core/quic_tag.h"
 #include "quiche/quic/core/quic_time.h"
 #include "quiche/quic/core/quic_types.h"
-#include "quiche/quic/platform/api/quic_export.h"
+#include "quiche/quic/core/quic_versions.h"
+#include "quiche/quic/platform/api/quic_socket_address.h"
+#include "quiche/common/platform/api/quiche_export.h"
+#include "quiche/common/quiche_ip_address_family.h"
 
 namespace quic {
 
@@ -261,6 +266,10 @@ class QUICHE_EXPORT QuicConfig {
 
   const std::optional<std::string>& GetReceivedGoogleHandshakeMessage() const;
 
+  void SetDebuggingSniToSend(const std::string& debugging_sni);
+
+  const std::optional<std::string>& GetReceivedDebuggingSni() const;
+
   // Sets initial received connection options.  All received connection options
   // will be initialized with these fields. Initial received options may only be
   // set once per config, prior to the setting of any other options.  If options
@@ -481,8 +490,8 @@ class QUICHE_EXPORT QuicConfig {
   void SetMinAckDelayDraft10Ms(uint64_t min_ack_delay_ms);
   bool HasMinAckDelayDraft10ToSend() const;
   uint64_t GetMinAckDelayDraft10ToSendMs() const;
-  bool HasReceivedMinAckDelayMs() const;
-  uint32_t ReceivedMinAckDelayMs() const;
+  bool HasReceivedMinAckDelayDraft10Ms() const;
+  uint32_t ReceivedMinAckDelayDraft10Ms() const;
 
   void SetAckDelayExponentToSend(uint32_t exponent);
   uint32_t GetAckDelayExponentToSend() const;
@@ -518,6 +527,13 @@ class QUICHE_EXPORT QuicConfig {
       const QuicConnectionId& retry_source_connection_id);
   bool HasReceivedRetrySourceConnectionId() const;
   QuicConnectionId ReceivedRetrySourceConnectionId() const;
+
+  uint64_t peer_reordering_threshold() const {
+    return peer_reordering_threshold_;
+  }
+  void set_peer_reordering_threshold(uint64_t peer_reordering_threshold) {
+    peer_reordering_threshold_ = peer_reordering_threshold;
+  }
 
   bool negotiated() const;
 
@@ -559,6 +575,8 @@ class QUICHE_EXPORT QuicConfig {
 
   // Called to clear google_handshake_message to send or received.
   void ClearGoogleHandshakeMessage();
+
+  void PrintTransportParameters() const;
 
  private:
   friend class test::QuicConfigPeer;
@@ -668,9 +686,9 @@ class QUICHE_EXPORT QuicConfig {
   // Uses the max_ack_delay transport parameter in IETF QUIC.
   QuicFixedUint32 max_ack_delay_ms_;
 
-  // Minimum ack delay. Used to enable sender control of max_ack_delay.
-  // Uses the min_ack_delay transport parameter in IETF QUIC extension.
-  QuicFixedUint32 min_ack_delay_ms_;
+  // Minimum ack delay. Used to enable sender control of min_ack_delay.
+  // Uses the min_ack_delay transport parameter in IETF QUIC extension,
+  // draft-10 through -11.
   QuicFixedUint62 min_ack_delay_ms_draft10_;
 
   // The sent exponent is the exponent that this node uses when serializing an
@@ -724,9 +742,19 @@ class QUICHE_EXPORT QuicConfig {
   // values means 'discard' data not received.
   int32_t discard_length_received_ = -1;
 
+  // A hardcoded value for reordering threshold, as if the peer had sent an
+  // ACK_FREQUENCY frame with that value.
+  uint64_t peer_reordering_threshold_ = 1;
+
   // Google internal handshake message.
   std::optional<std::string> google_handshake_message_to_send_;
   std::optional<std::string> received_google_handshake_message_;
+
+  // Debugging Server Name Indication. These fields are used to send and get the
+  // SNI in the transport parameters from client to the server for
+  // debugging purposes only.
+  std::optional<std::string> debugging_sni_to_send_;
+  std::optional<std::string> received_debugging_sni_;
 
   // Support for RESET_STREAM_AT frame.
   bool reliable_stream_reset_;

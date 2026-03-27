@@ -10,6 +10,7 @@
 // See the spec for details:
 // https://http2.github.io/http2-spec/compression.html#rfc.section.6
 
+#include <cstdint>
 #include <ostream>
 #include <string>
 
@@ -19,7 +20,7 @@ namespace http2 {
 
 const size_t kFirstDynamicTableIndex = 62;
 
-enum class HpackEntryType {
+enum class HpackEntryType : uint8_t {
   // Entry is an index into the static or dynamic table. Decoding it has no
   // effect on the dynamic table.
   kIndexedHeader,

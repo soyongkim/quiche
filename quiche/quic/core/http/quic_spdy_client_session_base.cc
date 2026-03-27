@@ -13,14 +13,14 @@
 #include "quiche/quic/platform/api/quic_flags.h"
 #include "quiche/quic/platform/api/quic_logging.h"
 
-using quiche::HttpHeaderBlock;
-
 namespace quic {
 
 QuicSpdyClientSessionBase::QuicSpdyClientSessionBase(
     QuicConnection* connection, QuicSession::Visitor* visitor,
-    const QuicConfig& config, const ParsedQuicVersionVector& supported_versions)
-    : QuicSpdySession(connection, visitor, config, supported_versions) {}
+    const QuicConfig& config, const ParsedQuicVersionVector& supported_versions,
+    QuicPriorityType priority_type)
+    : QuicSpdySession(connection, visitor, config, supported_versions,
+                      priority_type) {}
 
 QuicSpdyClientSessionBase::~QuicSpdyClientSessionBase() {
   DeleteConnection();
@@ -32,7 +32,7 @@ void QuicSpdyClientSessionBase::OnConfigNegotiated() {
 
 void QuicSpdyClientSessionBase::OnStreamClosed(QuicStreamId stream_id) {
   QuicSpdySession::OnStreamClosed(stream_id);
-  if (!VersionUsesHttp3(transport_version())) {
+  if (!VersionIsIetfQuic(transport_version())) {
     headers_stream()->MaybeReleaseSequencerBuffer();
   }
 }

@@ -62,7 +62,7 @@ std::vector<TestParams> GetTestParams() {
   std::vector<TestParams> params;
   ParsedQuicVersionVector all_supported_versions = AllSupportedVersions();
   for (const auto& version : AllSupportedVersions()) {
-    if (!VersionUsesHttp3(version.transport_version)) {
+    if (!VersionIsIetfQuic(version.transport_version)) {
       continue;
     }
     for (Perspective p : {Perspective::IS_SERVER, Perspective::IS_CLIENT}) {
@@ -223,7 +223,7 @@ TEST_P(QuicSendControlStreamTest, WriteSettings) {
       };
 
   EXPECT_CALL(session_, WritevData(send_control_stream_->id(), _, _, _, _, _))
-      .WillRepeatedly(Invoke(save_write_data));
+      .WillRepeatedly(save_write_data);
 
   send_control_stream_->MaybeSendSettingsFrame();
   quiche::test::CompareCharArraysWithHexError(

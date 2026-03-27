@@ -108,12 +108,12 @@ class RecordingProofVerifier : public ProofVerifier {
     }
 
     // Extract the CN field
-    X509_NAME* subject = X509_get_subject_name(cert.get());
+    const X509_NAME* subject = X509_get_subject_name(cert.get());
     const int index = X509_NAME_get_index_by_NID(subject, NID_commonName, -1);
     if (index < 0) {
       return QUIC_FAILURE;
     }
-    ASN1_STRING* name_data =
+    const ASN1_STRING* name_data =
         X509_NAME_ENTRY_get_data(X509_NAME_get_entry(subject, index));
     if (name_data == nullptr) {
       return QUIC_FAILURE;
@@ -144,9 +144,6 @@ void MockableQuicClientDefaultNetworkHelper::ProcessPacket(
     const QuicSocketAddress& peer_address, const QuicReceivedPacket& packet) {
   QuicClientDefaultNetworkHelper::ProcessPacket(self_address, peer_address,
                                                 packet);
-  if (track_last_incoming_packet_) {
-    last_incoming_packet_ = packet.Clone();
-  }
 }
 
 SocketFd MockableQuicClientDefaultNetworkHelper::CreateUDPSocket(
@@ -171,22 +168,15 @@ MockableQuicClientDefaultNetworkHelper::CreateQuicPacketWriter() {
     return writer;
   }
   test_writer_->set_writer(writer);
-  return test_writer_;
+  QuicPacketWriterWrapper* test_writer = test_writer_;
+  // Reset the `test_writer_` so that it can't be used again.
+  test_writer_ = nullptr;
+  return test_writer;
 }
 
 void MockableQuicClientDefaultNetworkHelper::set_socket_fd_configurator(
     quiche::MultiUseCallback<void(SocketFd)> socket_fd_configurator) {
   socket_fd_configurator_ = std::move(socket_fd_configurator);
-}
-
-const QuicReceivedPacket*
-MockableQuicClientDefaultNetworkHelper::last_incoming_packet() {
-  return last_incoming_packet_.get();
-}
-
-void MockableQuicClientDefaultNetworkHelper::set_track_last_incoming_packet(
-    bool track) {
-  track_last_incoming_packet_ = track;
 }
 
 void MockableQuicClientDefaultNetworkHelper::UseWriter(
@@ -265,10 +255,11 @@ QuicConnectionId MockableQuicClient::GetClientConnectionId() {
   return QuicDefaultClient::GetClientConnectionId();
 }
 
-void MockableQuicClient::UseClientConnectionId(
-    QuicConnectionId client_connection_id) {
-  client_connection_id_overridden_ = true;
-  override_client_connection_id_ = client_connection_id;
+std::unique_ptr<QuicMigrationHelper>
+MockableQuicClient::CreateQuicMigrationHelper() {
+  auto migration_helper = std::make_unique<QuicTestMigrationHelper>(*this);
+  migration_helper_ = migration_helper.get();
+  return migration_helper;
 }
 
 void MockableQuicClient::UseClientConnectionIdLength(
@@ -281,18 +272,37 @@ void MockableQuicClient::UseWriter(QuicPacketWriterWrapper* writer) {
 }
 
 void MockableQuicClient::set_peer_address(const QuicSocketAddress& address) {
-  mockable_network_helper()->set_peer_address(address);
   if (client_session() != nullptr) {
     client_session()->connection()->AddKnownServerAddress(address);
+    static_cast<QuicPacketWriterWrapper*>(writer())->set_peer_address(address);
+  } else {
+    mockable_network_helper()->set_peer_address(address);
   }
 }
 
-const QuicReceivedPacket* MockableQuicClient::last_incoming_packet() {
-  return mockable_network_helper()->last_incoming_packet();
+void MockableQuicClient::QuicTestMigrationHelper::AddNewNetwork(
+    QuicNetworkHandle network, QuicIpAddress address) {
+  network_to_address_map_[network] = address;
 }
 
-void MockableQuicClient::set_track_last_incoming_packet(bool track) {
-  mockable_network_helper()->set_track_last_incoming_packet(track);
+QuicIpAddress MockableQuicClient::QuicTestMigrationHelper::GetAddressForNetwork(
+    QuicNetworkHandle network) const {
+  QUICHE_DCHECK(network_to_address_map_.contains(network))
+      << "Network " << network << " not found in network_to_address_map_.";
+  return network_to_address_map_.at(network);
+}
+
+QuicNetworkHandle
+MockableQuicClient::QuicTestMigrationHelper::FindAlternateNetwork(
+    QuicNetworkHandle network) {
+  for (const auto& [key, value] : network_to_address_map_) {
+    if (key != network) {
+      QUICHE_DLOG(INFO) << "Found alternate network " << key << " with address "
+                        << value.ToString();
+      return key;
+    }
+  }
+  return kInvalidNetworkHandle;
 }
 
 QuicTestClient::QuicTestClient(
@@ -481,6 +491,14 @@ int64_t QuicTestClient::SendData(
 
 bool QuicTestClient::response_complete() const { return response_complete_; }
 
+QuicTime QuicTestClient::request_start_time() const {
+  return request_start_time_;
+}
+
+QuicTime QuicTestClient::response_end_time() const {
+  return response_end_time_;
+}
+
 int64_t QuicTestClient::response_body_size() const {
   return response_body_size_;
 }
@@ -545,6 +563,8 @@ QuicSpdyClientStream* QuicTestClient::GetOrCreateStream() {
   if (!latest_created_stream_) {
     SetLatestCreatedStream(client_->CreateClientStream());
     if (latest_created_stream_) {
+      request_start_time_ =
+          client()->client_session()->connection()->clock()->Now();
       latest_created_stream_->SetPriority(QuicStreamPriority(
           HttpStreamPriority{priority_, /* incremental = */ false}));
     }
@@ -573,6 +593,10 @@ const QuicTagValueMap& QuicTestClient::GetServerConfig() const {
       config->LookupOrCreate(client_->server_id());
   const CryptoHandshakeMessage* handshake_msg = state->GetServerConfig();
   return handshake_msg->tag_value_map();
+}
+
+const QuicConnectionStats& QuicTestClient::GetConnectionStats() const {
+  return client_->client_session()->connection()->GetStats();
 }
 
 bool QuicTestClient::connected() const { return client_->connected(); }
@@ -750,12 +774,6 @@ void QuicTestClient::UseConnectionIdLength(
   client_->set_server_connection_id_length(server_connection_id_length);
 }
 
-void QuicTestClient::UseClientConnectionId(
-    QuicConnectionId client_connection_id) {
-  QUICHE_DCHECK(!connected());
-  client_->UseClientConnectionId(client_connection_id);
-}
-
 void QuicTestClient::UseClientConnectionIdLength(
     uint8_t client_connection_id_length) {
   QUICHE_DCHECK(!connected());
@@ -843,6 +861,10 @@ void QuicTestClient::ReadNextResponse() {
   stream_error_ = state.stream_error;
   response_ = state.response;
   response_complete_ = state.response_complete;
+  if (response_complete_) {
+    response_end_time_ =
+        client()->client_session()->connection()->clock()->Now();
+  }
   response_headers_complete_ = state.response_headers_complete;
   response_headers_ = state.response_headers.Clone();
   response_trailers_ = state.response_trailers.Clone();

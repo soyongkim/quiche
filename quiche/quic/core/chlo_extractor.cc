@@ -80,7 +80,7 @@ class ChloFramerVisitor : public QuicFramerVisitorInterface,
   bool OnWindowUpdateFrame(const QuicWindowUpdateFrame& frame) override;
   bool OnBlockedFrame(const QuicBlockedFrame& frame) override;
   bool OnPaddingFrame(const QuicPaddingFrame& frame) override;
-  bool OnMessageFrame(const QuicMessageFrame& frame) override;
+  bool OnDatagramFrame(const QuicDatagramFrame& frame) override;
   bool OnHandshakeDoneFrame(const QuicHandshakeDoneFrame& frame) override;
   bool OnAckFrequencyFrame(const QuicAckFrequencyFrame& frame) override;
   bool OnImmediateAckFrame(const QuicImmediateAckFrame& frame) override;
@@ -159,7 +159,7 @@ void ChloFramerVisitor::OnUndecryptablePacket(
     bool /*has_decryption_key*/) {}
 
 bool ChloFramerVisitor::OnStreamFrame(const QuicStreamFrame& frame) {
-  if (QuicVersionUsesCryptoFrames(framer_->transport_version())) {
+  if (VersionIsIetfQuic(framer_->transport_version())) {
     // CHLO will be sent in CRYPTO frames in v47 and above.
     return false;
   }
@@ -173,7 +173,7 @@ bool ChloFramerVisitor::OnStreamFrame(const QuicStreamFrame& frame) {
 }
 
 bool ChloFramerVisitor::OnCryptoFrame(const QuicCryptoFrame& frame) {
-  if (!QuicVersionUsesCryptoFrames(framer_->transport_version())) {
+  if (!VersionIsIetfQuic(framer_->transport_version())) {
     // CHLO will be in stream frames before v47.
     return false;
   }
@@ -299,7 +299,7 @@ bool ChloFramerVisitor::OnPaddingFrame(const QuicPaddingFrame& /*frame*/) {
   return true;
 }
 
-bool ChloFramerVisitor::OnMessageFrame(const QuicMessageFrame& /*frame*/) {
+bool ChloFramerVisitor::OnDatagramFrame(const QuicDatagramFrame& /*frame*/) {
   return true;
 }
 

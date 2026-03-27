@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <memory>
 #include <utility>
+#include <ifaddrs.h>
+
 
 #include "quiche/quic/core/crypto/quic_random.h"
 #include "quiche/quic/core/http/spdy_utils.h"
@@ -18,6 +20,7 @@
 #include "quiche/quic/core/quic_constants.h"
 #include "quiche/quic/core/quic_crypto_client_stream.h"
 #include "quiche/quic/core/quic_error_codes.h"
+#include "quiche/quic/core/quic_force_blockable_packet_writer.h"
 #include "quiche/quic/core/quic_packet_writer.h"
 #include "quiche/quic/core/quic_path_validator.h"
 #include "quiche/quic/core/quic_server_id.h"
@@ -137,6 +140,58 @@ QuicClientBase::QuicClientBase(
 
 QuicClientBase::~QuicClientBase() = default;
 
+QuicIpAddress IterfaceToAddress(std::string iface) {
+  struct ifaddrs *ifap, *ifa;
+  struct sockaddr_in *sa;
+  QuicIpAddress ip = QuicIpAddress::Any4();
+
+  getifaddrs(&ifap);
+  for(ifa = ifap; ifa; ifa = ifa->ifa_next) {
+    if(ifa->ifa_addr && ifa->ifa_addr->sa_family == AF_INET) {
+      if(strcmp(ifa->ifa_name, iface.c_str()) == 0) {
+        sa = (struct sockaddr_in *) ifa->ifa_addr;
+        ip = QuicIpAddress(sa->sin_addr);
+        break;
+      }
+    }
+  }
+  freeifaddrs(ifap);
+  return ip;
+}
+
+void QuicClientBase::OnTestConnectionMigration() {
+  MigrateSocketWithSpecifiedPort(IterfaceToAddress(interface_name_), 49999);
+}
+
+int count = 0;
+void QuicClientBase::OnRequestedConnectionMigration() {
+  // Try connection migration to the althernative address.
+  if(alt_interface_name_ != "") {
+    std::cout << "[SD] Connection migration to alternative address: " << IterfaceToAddress(alt_interface_name_).ToString() << " : " << alt_interface_name_ << std::endl;
+    //MigrateSocket(IterfaceToAddress(alt_interface_name_));
+    //ValidateAndMigrateSocket(IterfaceToAddress(alt_interface_name_));
+
+
+    // Port change type. it's working if the connection id is same. it means the server can receive the packet.
+    MigrateSocketWithSpecifiedPort(IterfaceToAddress(interface_name_), 50000);
+
+    // it's not wokring even though the server can receive the packet.
+    //MigrateSocketWithSpecifiedPort(IterfaceToAddress(alt_interface_name_), 50000);
+
+    // if(count == 0) {
+    //  // MigrateSocketWithSpecifiedPort(IterfaceToAddress(interface_name_), 50000);
+    //   MigrateSocket(IterfaceToAddress(alt_interface_name_));
+
+    //   count++;
+    // } else {
+    //   //MigrateSocket(IterfaceToAddress(alt_interface_name_));
+    //   MigrateSocketWithSpecifiedPort(IterfaceToAddress(interface_name_), 50000);
+    // }
+
+  }
+}
+
+
 bool QuicClientBase::Initialize() {
   num_sent_client_hellos_ = 0;
   connection_error_ = QUIC_NO_ERROR;
@@ -156,6 +211,10 @@ bool QuicClientBase::Initialize() {
         kSessionMaxRecvWindowSize);
   }
 
+  if (interface_name_ != "") {
+    bind_to_address_ = IterfaceToAddress(interface_name_);  
+  }
+
   if (!network_helper_->CreateUDPSocketAndBind(server_address_,
                                                bind_to_address_, local_port_)) {
     return false;
@@ -172,6 +231,7 @@ bool QuicClientBase::Connect() {
   while (!connected() &&
          num_attempts <= QuicCryptoClientStream::kMaxClientHellos) {
     StartConnect();
+    //std::cout << "[SD] Client Connect Attempt : " << num_attempts << std::endl;
     while (EncryptionBeingEstablished()) {
       WaitForEvents();
     }
@@ -187,22 +247,31 @@ bool QuicClientBase::Connect() {
     QUIC_BUG(quic_bug_10906_1) << "Missing session after Connect";
     return false;
   }
+  //std::cout << "[SD] Connection Estalibshed : " << bind_to_address_.ToString() << " : " << interface_name_ << std::endl;
   return session()->connection()->connected();
 }
 
 void QuicClientBase::StartConnect() {
   QUICHE_DCHECK(initialized_);
   QUICHE_DCHECK(!connected());
-  QuicPacketWriter* writer = network_helper_->CreateQuicPacketWriter();
+  QuicPacketWriter* writer = nullptr;
+  if (!handle_migration_in_session_) {
+    writer = network_helper_->CreateQuicPacketWriter();
+  } else {
+    // To support connection/port migration using migration manager, the writer
+    // needs to be force blockable.
+    auto* force_blockable_writer = new QuicForceBlockablePacketWriter();
+    // Owns `inner_writer`.
+    force_blockable_writer->set_writer(
+        network_helper_->CreateQuicPacketWriter());
+    writer = force_blockable_writer;
+  }
   ParsedQuicVersion mutual_version = UnsupportedQuicVersion();
   const bool can_reconnect_with_different_version =
       CanReconnectWithDifferentVersion(&mutual_version);
   if (connected_or_attempting_connect()) {
     // Clear queued up data if client can not try to connect with a different
     // version.
-    if (!can_reconnect_with_different_version) {
-      ClearDataToResend();
-    }
     // Before we destroy the last session and create a new one, gather its stats
     // and update the stats for the overall connection.
     UpdateStats();
@@ -212,6 +281,8 @@ void QuicClientBase::StartConnect() {
       can_reconnect_with_different_version
           ? ParsedQuicVersionVector{mutual_version}
           : supported_versions();
+
+  std::cout << "[quic_client_base] Client Supported Version : " << client_supported_versions << std::endl;
 
   session_ = CreateQuicClientSession(
       client_supported_versions,
@@ -229,6 +300,11 @@ void QuicClientBase::StartConnect() {
   if (initial_max_packet_length_ != 0) {
     session()->connection()->SetMaxPacketLength(initial_max_packet_length_);
   }
+
+  // [SD] for connection migration
+  session()->set_client_base_visitor(this);
+
+
   // Reset |writer()| after |session()| so that the old writer outlives the old
   // session.
   set_writer(writer);
@@ -252,8 +328,6 @@ void QuicClientBase::Disconnect() {
         QUIC_PEER_GOING_AWAY, "Client disconnecting",
         ConnectionCloseBehavior::SEND_CONNECTION_CLOSE_PACKET);
   }
-
-  ClearDataToResend();
 
   network_helper_->CleanUpAllUDPSockets();
 }
@@ -304,7 +378,9 @@ bool QuicClientBase::MigrateSocketWithSpecifiedPort(
     return false;
   }
 
-  network_helper_->CleanUpAllUDPSockets();
+  // keep the port.
+  //network_helper_->CleanUpAllUDPSockets();
+
   std::unique_ptr<QuicPacketWriter> writer =
       CreateWriterForNewNetwork(new_host, port);
   if (writer == nullptr) {
@@ -312,6 +388,11 @@ bool QuicClientBase::MigrateSocketWithSpecifiedPort(
         << "MigrateSocketWithSpecifiedPort failed from writer creation";
     return false;
   }
+
+  std::cout << "[quic_client_base] GetlatestClientAddress : " << network_helper_->GetLatestClientAddress().ToString() <<
+      " | peer_address: " << session()->connection()->peer_address().ToString() << 
+      " | new host: " << new_host.ToString() << std::endl;
+
   if (!session()->MigratePath(network_helper_->GetLatestClientAddress(),
                               session()->connection()->peer_address(),
                               writer.get(), false)) {
@@ -319,16 +400,20 @@ bool QuicClientBase::MigrateSocketWithSpecifiedPort(
         << "MigrateSocketWithSpecifiedPort failed from session()->MigratePath";
     return false;
   }
+
   set_writer(writer.release());
   return true;
 }
 
 bool QuicClientBase::ValidateAndMigrateSocket(const QuicIpAddress& new_host) {
-  QUICHE_DCHECK(VersionHasIetfQuicFrames(
-      session_->connection()->version().transport_version));
+  QUICHE_DCHECK(
+      VersionIsIetfQuic(session_->connection()->version().transport_version));
   if (!connected()) {
     return false;
   }
+
+  // [SD] Test for just sending Path Challenge
+  network_helper_->CleanUpAllUDPSockets();
 
   std::unique_ptr<QuicPacketWriter> writer =
       CreateWriterForNewNetwork(new_host, local_port_);
@@ -407,7 +492,7 @@ bool QuicClientBase::WaitForOneRttKeysAvailable() {
 }
 
 bool QuicClientBase::WaitForHandshakeConfirmed() {
-  if (!session_->connection()->version().UsesTls()) {
+  if (!session_->connection()->version().IsIetfQuic()) {
     return WaitForOneRttKeysAvailable();
   }
   // Otherwise, wait for receipt of HANDSHAKE_DONE frame.
@@ -417,6 +502,10 @@ bool QuicClientBase::WaitForHandshakeConfirmed() {
 
   // If the handshake fails due to a timeout, the connection will be closed.
   QUIC_LOG_IF(ERROR, !connected()) << "Handshake with server failed.";
+
+
+  // [SD] Testing
+  //OnRequestedConnectionMigration();
   return connected();
 }
 

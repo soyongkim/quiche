@@ -379,7 +379,7 @@ TEST_P(PendingStreamTest, FromPendingStreamThenData) {
 
 TEST_P(PendingStreamTest, ResetStreamAt) {
   Initialize();
-  if (!VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
 
@@ -562,7 +562,7 @@ TEST_P(QuicStreamTest, ConnectionCloseAfterStreamClose) {
   QuicRstStreamFrame rst_frame(kInvalidControlFrameId, stream_->id(),
                                QUIC_STREAM_CANCELLED, 1234);
   stream_->OnStreamReset(rst_frame);
-  if (VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (VersionIsIetfQuic(session_->transport_version())) {
     // Create and inject a STOP SENDING frame to complete the close
     // of the stream. This is only needed for version 99/IETF QUIC.
     QuicStopSendingFrame stop_sending(kInvalidControlFrameId, stream_->id(),
@@ -603,7 +603,7 @@ TEST_P(QuicStreamTest, RstAlwaysSentIfNoFinSent) {
   QuicRstStreamFrame rst_frame(kInvalidControlFrameId, stream_->id(),
                                QUIC_STREAM_CANCELLED, 1234);
   stream_->OnStreamReset(rst_frame);
-  if (VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (VersionIsIetfQuic(session_->transport_version())) {
     // Create and inject a STOP SENDING frame to complete the close
     // of the stream. This is only needed for version 99/IETF QUIC.
     QuicStopSendingFrame stop_sending(kInvalidControlFrameId, stream_->id(),
@@ -745,7 +745,7 @@ TEST_P(QuicStreamTest, StopReadingSendsFlowControl) {
       .Times(0);
   EXPECT_CALL(*session_, WriteControlFrame(_, _))
       .Times(AtLeast(1))
-      .WillRepeatedly(Invoke(&ClearControlFrameWithTransmissionType));
+      .WillRepeatedly(&ClearControlFrameWithTransmissionType);
 
   std::string data(1000, 'x');
   for (QuicStreamOffset offset = 0;
@@ -969,8 +969,8 @@ TEST_P(QuicStreamTest, StreamWaitsForAcks) {
   EXPECT_TRUE(stream_->IsWaitingForAcks());
   QuicByteCount newly_acked_length = 0;
   EXPECT_TRUE(stream_->OnStreamFrameAcked(0, 9, false, QuicTime::Delta::Zero(),
-                                          QuicTime::Zero(),
-                                          &newly_acked_length));
+                                          QuicTime::Zero(), &newly_acked_length,
+                                          /*is_retransmission=*/false));
   EXPECT_EQ(9u, newly_acked_length);
   // Stream is not waiting for acks as all sent data is acked.
   EXPECT_FALSE(stream_->IsWaitingForAcks());
@@ -992,8 +992,8 @@ TEST_P(QuicStreamTest, StreamWaitsForAcks) {
 
   // kData2 is acked.
   EXPECT_TRUE(stream_->OnStreamFrameAcked(9, 9, false, QuicTime::Delta::Zero(),
-                                          QuicTime::Zero(),
-                                          &newly_acked_length));
+                                          QuicTime::Zero(), &newly_acked_length,
+                                          /*is_retransmission=*/false));
   EXPECT_EQ(9u, newly_acked_length);
   // Stream is waiting for acks as FIN is not acked.
   EXPECT_TRUE(stream_->IsWaitingForAcks());
@@ -1003,8 +1003,8 @@ TEST_P(QuicStreamTest, StreamWaitsForAcks) {
   // FIN is acked.
   EXPECT_CALL(*stream_, OnWriteSideInDataRecvdState());
   EXPECT_TRUE(stream_->OnStreamFrameAcked(18, 0, true, QuicTime::Delta::Zero(),
-                                          QuicTime::Zero(),
-                                          &newly_acked_length));
+                                          QuicTime::Zero(), &newly_acked_length,
+                                          /*is_retransmission=*/false));
   EXPECT_EQ(0u, newly_acked_length);
   EXPECT_FALSE(stream_->IsWaitingForAcks());
   EXPECT_FALSE(session_->HasUnackedStreamData());
@@ -1025,20 +1025,20 @@ TEST_P(QuicStreamTest, StreamDataGetAckedOutOfOrder) {
   EXPECT_TRUE(session_->HasUnackedStreamData());
   QuicByteCount newly_acked_length = 0;
   EXPECT_TRUE(stream_->OnStreamFrameAcked(9, 9, false, QuicTime::Delta::Zero(),
-                                          QuicTime::Zero(),
-                                          &newly_acked_length));
+                                          QuicTime::Zero(), &newly_acked_length,
+                                          /*is_retransmission=*/false));
   EXPECT_TRUE(session_->HasUnackedStreamData());
   EXPECT_EQ(9u, newly_acked_length);
   EXPECT_EQ(3u, QuicStreamPeer::SendBuffer(stream_).size());
   EXPECT_TRUE(stream_->OnStreamFrameAcked(18, 9, false, QuicTime::Delta::Zero(),
-                                          QuicTime::Zero(),
-                                          &newly_acked_length));
+                                          QuicTime::Zero(), &newly_acked_length,
+                                          /*is_retransmission=*/false));
   EXPECT_TRUE(session_->HasUnackedStreamData());
   EXPECT_EQ(9u, newly_acked_length);
   EXPECT_EQ(3u, QuicStreamPeer::SendBuffer(stream_).size());
   EXPECT_TRUE(stream_->OnStreamFrameAcked(0, 9, false, QuicTime::Delta::Zero(),
-                                          QuicTime::Zero(),
-                                          &newly_acked_length));
+                                          QuicTime::Zero(), &newly_acked_length,
+                                          /*is_retransmission=*/false));
   EXPECT_TRUE(session_->HasUnackedStreamData());
   EXPECT_EQ(9u, newly_acked_length);
   EXPECT_EQ(0u, QuicStreamPeer::SendBuffer(stream_).size());
@@ -1047,8 +1047,8 @@ TEST_P(QuicStreamTest, StreamDataGetAckedOutOfOrder) {
   EXPECT_TRUE(session_->HasUnackedStreamData());
   EXPECT_CALL(*stream_, OnWriteSideInDataRecvdState());
   EXPECT_TRUE(stream_->OnStreamFrameAcked(27, 0, true, QuicTime::Delta::Zero(),
-                                          QuicTime::Zero(),
-                                          &newly_acked_length));
+                                          QuicTime::Zero(), &newly_acked_length,
+                                          /*is_retransmission=*/false));
   EXPECT_EQ(0u, newly_acked_length);
   EXPECT_FALSE(stream_->IsWaitingForAcks());
   EXPECT_FALSE(session_->HasUnackedStreamData());
@@ -1076,7 +1076,7 @@ TEST_P(QuicStreamTest, CancelStream) {
               OnStreamReset(stream_->id(), QUIC_STREAM_CANCELLED));
   EXPECT_CALL(*session_, WriteControlFrame(_, _))
       .Times(AtLeast(1))
-      .WillRepeatedly(Invoke(&ClearControlFrameWithTransmissionType));
+      .WillRepeatedly(&ClearControlFrameWithTransmissionType);
 
   EXPECT_CALL(*session_, MaybeSendRstStreamFrame(_, _, _))
       .WillOnce(InvokeWithoutArgs([this]() {
@@ -1093,7 +1093,7 @@ TEST_P(QuicStreamTest, CancelStream) {
 }
 
 TEST_P(QuicStreamTest, RstFrameReceivedStreamNotFinishSending) {
-  if (VersionHasIetfQuicFrames(GetParam().transport_version)) {
+  if (VersionIsIetfQuic(GetParam().transport_version)) {
     // In IETF QUIC, receiving a RESET_STREAM will only close the read side. The
     // stream itself is not closed and will not send reset.
     return;
@@ -1416,20 +1416,20 @@ TEST_P(QuicStreamTest, StreamDataGetAckedMultipleTimes) {
   // Verify [0, 9) 9 bytes are acked.
   QuicByteCount newly_acked_length = 0;
   EXPECT_TRUE(stream_->OnStreamFrameAcked(0, 9, false, QuicTime::Delta::Zero(),
-                                          QuicTime::Zero(),
-                                          &newly_acked_length));
+                                          QuicTime::Zero(), &newly_acked_length,
+                                          /*is_retransmission=*/false));
   EXPECT_EQ(9u, newly_acked_length);
   EXPECT_EQ(2u, QuicStreamPeer::SendBuffer(stream_).size());
   // Verify [9, 22) 13 bytes are acked.
   EXPECT_TRUE(stream_->OnStreamFrameAcked(5, 17, false, QuicTime::Delta::Zero(),
-                                          QuicTime::Zero(),
-                                          &newly_acked_length));
+                                          QuicTime::Zero(), &newly_acked_length,
+                                          /*is_retransmission=*/false));
   EXPECT_EQ(13u, newly_acked_length);
   EXPECT_EQ(1u, QuicStreamPeer::SendBuffer(stream_).size());
   // Verify [22, 26) 4 bytes are acked.
   EXPECT_TRUE(stream_->OnStreamFrameAcked(18, 8, false, QuicTime::Delta::Zero(),
-                                          QuicTime::Zero(),
-                                          &newly_acked_length));
+                                          QuicTime::Zero(), &newly_acked_length,
+                                          /*is_retransmission=*/false));
   EXPECT_EQ(4u, newly_acked_length);
   EXPECT_EQ(1u, QuicStreamPeer::SendBuffer(stream_).size());
   EXPECT_TRUE(stream_->IsWaitingForAcks());
@@ -1437,8 +1437,8 @@ TEST_P(QuicStreamTest, StreamDataGetAckedMultipleTimes) {
 
   // Ack [0, 27). Verify [26, 27) 1 byte is acked.
   EXPECT_TRUE(stream_->OnStreamFrameAcked(26, 1, false, QuicTime::Delta::Zero(),
-                                          QuicTime::Zero(),
-                                          &newly_acked_length));
+                                          QuicTime::Zero(), &newly_acked_length,
+                                          /*is_retransmission=*/false));
   EXPECT_EQ(1u, newly_acked_length);
   EXPECT_EQ(0u, QuicStreamPeer::SendBuffer(stream_).size());
   EXPECT_TRUE(stream_->IsWaitingForAcks());
@@ -1447,17 +1447,17 @@ TEST_P(QuicStreamTest, StreamDataGetAckedMultipleTimes) {
   // Ack Fin.
   EXPECT_CALL(*stream_, OnWriteSideInDataRecvdState()).Times(1);
   EXPECT_TRUE(stream_->OnStreamFrameAcked(27, 0, true, QuicTime::Delta::Zero(),
-                                          QuicTime::Zero(),
-                                          &newly_acked_length));
+                                          QuicTime::Zero(), &newly_acked_length,
+                                          /*is_retransmission=*/false));
   EXPECT_EQ(0u, newly_acked_length);
   EXPECT_EQ(0u, QuicStreamPeer::SendBuffer(stream_).size());
   EXPECT_FALSE(stream_->IsWaitingForAcks());
   EXPECT_FALSE(session_->HasUnackedStreamData());
 
   // Ack [10, 27) and fin. No new data is acked.
-  EXPECT_FALSE(
-      stream_->OnStreamFrameAcked(10, 17, true, QuicTime::Delta::Zero(),
-                                  QuicTime::Zero(), &newly_acked_length));
+  EXPECT_FALSE(stream_->OnStreamFrameAcked(
+      10, 17, true, QuicTime::Delta::Zero(), QuicTime::Zero(),
+      &newly_acked_length, /*is_retransmission=*/false));
   EXPECT_EQ(0u, newly_acked_length);
   EXPECT_EQ(0u, QuicStreamPeer::SendBuffer(stream_).size());
   EXPECT_FALSE(stream_->IsWaitingForAcks());
@@ -1512,8 +1512,8 @@ TEST_P(QuicStreamTest, OnStreamFrameLost) {
   // Ack [9, 18).
   QuicByteCount newly_acked_length = 0;
   EXPECT_TRUE(stream_->OnStreamFrameAcked(9, 9, false, QuicTime::Delta::Zero(),
-                                          QuicTime::Zero(),
-                                          &newly_acked_length));
+                                          QuicTime::Zero(), &newly_acked_length,
+                                          /*is_retransmission=*/false));
   EXPECT_EQ(9u, newly_acked_length);
   EXPECT_FALSE(stream_->IsStreamFrameOutstanding(9, 3, false));
   EXPECT_TRUE(stream_->HasPendingRetransmission());
@@ -1633,7 +1633,8 @@ TEST_P(QuicStreamTest, RetransmitStreamData) {
   // Ack [10, 13).
   QuicByteCount newly_acked_length = 0;
   stream_->OnStreamFrameAcked(10, 3, false, QuicTime::Delta::Zero(),
-                              QuicTime::Zero(), &newly_acked_length);
+                              QuicTime::Zero(), &newly_acked_length,
+                              /*is_retransmission=*/false);
   EXPECT_EQ(3u, newly_acked_length);
   // Retransmit [0, 18) with fin, and only [0, 8) is consumed.
   EXPECT_CALL(*session_, WritevData(stream_->id(), 10, 0, NO_FIN, _, _))
@@ -1678,7 +1679,7 @@ TEST_P(QuicStreamTest, ResetStreamOnTtlExpiresRetransmitLostData) {
 
   connection_->AdvanceTime(QuicTime::Delta::FromSeconds(1));
   // Verify stream gets reset because TTL expires.
-  if (session_->version().UsesHttp3()) {
+  if (session_->version().IsIetfQuic()) {
     EXPECT_CALL(*session_,
                 MaybeSendStopSendingFrame(_, QuicResetStreamError::FromInternal(
                                                  QUIC_STREAM_TTL_EXPIRED)))
@@ -1706,7 +1707,7 @@ TEST_P(QuicStreamTest, ResetStreamOnTtlExpiresEarlyRetransmitData) {
 
   connection_->AdvanceTime(QuicTime::Delta::FromSeconds(1));
   // Verify stream gets reset because TTL expires.
-  if (session_->version().UsesHttp3()) {
+  if (session_->version().IsIetfQuic()) {
     EXPECT_CALL(*session_,
                 MaybeSendStopSendingFrame(_, QuicResetStreamError::FromInternal(
                                                  QUIC_STREAM_TTL_EXPIRED)))
@@ -1730,7 +1731,7 @@ TEST_P(QuicStreamTest, OnStreamResetReadOrReadWrite) {
   QuicRstStreamFrame rst_frame(kInvalidControlFrameId, stream_->id(),
                                QUIC_STREAM_CANCELLED, 1234);
   stream_->OnStreamReset(rst_frame);
-  if (VersionHasIetfQuicFrames(connection_->transport_version())) {
+  if (VersionIsIetfQuic(connection_->transport_version())) {
     // Version 99/IETF QUIC should close just the read side.
     EXPECT_TRUE(QuicStreamPeer::read_side_closed(stream_));
     EXPECT_FALSE(stream_->write_side_closed());
@@ -1774,7 +1775,7 @@ TEST_P(QuicStreamTest, RstStreamFrameChangesCloseOffset) {
 TEST_P(QuicStreamTest, EmptyStreamFrameWithNoFin) {
   Initialize();
   QuicStreamFrame empty_stream_frame(stream_->id(), false, 0, "");
-  if (stream_->version().HasIetfQuicFrames()) {
+  if (stream_->version().IsIetfQuic()) {
     EXPECT_CALL(*connection_,
                 CloseConnection(QUIC_EMPTY_STREAM_FRAME_NO_FIN, _, _))
         .Times(0);
@@ -1797,7 +1798,7 @@ TEST_P(QuicStreamTest, SendRstWithCustomIetfCode) {
 
 TEST_P(QuicStreamTest, ResetWhenOffsetReached) {
   Initialize();
-  if (!VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   QuicResetStreamAtFrame rst(0, stream_->id(), QUIC_STREAM_CANCELLED, 400, 100);
@@ -1823,7 +1824,7 @@ TEST_P(QuicStreamTest, ResetWhenOffsetReached) {
 
 TEST_P(QuicStreamTest, ResetWhenOffsetReachedOutOfOrder) {
   Initialize();
-  if (!VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   QuicResetStreamAtFrame rst(0, stream_->id(), QUIC_STREAM_CANCELLED, 400, 100);
@@ -1846,7 +1847,7 @@ TEST_P(QuicStreamTest, ResetWhenOffsetReachedOutOfOrder) {
 
 TEST_P(QuicStreamTest, HigherReliableSizeIgnored) {
   Initialize();
-  if (!VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   QuicResetStreamAtFrame rst(0, stream_->id(), QUIC_STREAM_CANCELLED, 400, 100);
@@ -1875,7 +1876,7 @@ TEST_P(QuicStreamTest, HigherReliableSizeIgnored) {
 
 TEST_P(QuicStreamTest, InstantReset) {
   Initialize();
-  if (!VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   char data[100];
@@ -1894,7 +1895,7 @@ TEST_P(QuicStreamTest, InstantReset) {
 
 TEST_P(QuicStreamTest, ResetIgnoredDueToFin) {
   Initialize();
-  if (!VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   char data[100];
@@ -1921,7 +1922,7 @@ TEST_P(QuicStreamTest, ResetIgnoredDueToFin) {
 
 TEST_P(QuicStreamTest, ReliableOffsetBeyondFin) {
   Initialize();
-  if (!VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   char data[100];
@@ -1935,7 +1936,7 @@ TEST_P(QuicStreamTest, ReliableOffsetBeyondFin) {
 
 TEST_P(QuicStreamTest, FinBeforeReliableOffset) {
   Initialize();
-  if (!VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   QuicResetStreamAtFrame rst(0, stream_->id(), QUIC_STREAM_CANCELLED, 101, 101);
@@ -1949,7 +1950,7 @@ TEST_P(QuicStreamTest, FinBeforeReliableOffset) {
 
 TEST_P(QuicStreamTest, ReliableSizeNotAckedAtTimeOfReset) {
   Initialize();
-  if (!VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   char data[100];
@@ -1965,7 +1966,8 @@ TEST_P(QuicStreamTest, ReliableSizeNotAckedAtTimeOfReset) {
   EXPECT_CALL(*stream_, OnWriteSideInDataRecvdState()).Times(1);
   EXPECT_CALL(*connection_, OnStreamReset(stream_->id(), _)).Times(1);
   stream_->OnStreamFrameAcked(0, 100, false, QuicTime::Delta::Zero(),
-                              QuicTime::Zero(), &newly_acked_length);
+                              QuicTime::Zero(), &newly_acked_length,
+                              /*is_retransmission=*/false);
   std::vector<std::unique_ptr<QuicStream>>* closed_streams =
       session_->ClosedStreams();
   EXPECT_TRUE(closed_streams->empty());
@@ -1979,7 +1981,7 @@ TEST_P(QuicStreamTest, ReliableSizeNotAckedAtTimeOfReset) {
 
 TEST_P(QuicStreamTest, ReliableSizeNotAckedAtTimeOfResetAndRetransmitted) {
   Initialize();
-  if (!VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   char data[100];
@@ -2008,7 +2010,8 @@ TEST_P(QuicStreamTest, ReliableSizeNotAckedAtTimeOfResetAndRetransmitted) {
   EXPECT_CALL(*stream_, OnWriteSideInDataRecvdState()).Times(1);
   EXPECT_CALL(*connection_, OnStreamReset(stream_->id(), _)).Times(1);
   stream_->OnStreamFrameAcked(0, 100, false, QuicTime::Delta::Zero(),
-                              QuicTime::Zero(), &newly_acked_length);
+                              QuicTime::Zero(), &newly_acked_length,
+                              /*is_retransmission=*/false);
   std::vector<std::unique_ptr<QuicStream>>* closed_streams =
       session_->ClosedStreams();
   EXPECT_TRUE(closed_streams->empty());
@@ -2022,7 +2025,7 @@ TEST_P(QuicStreamTest, ReliableSizeNotAckedAtTimeOfResetAndRetransmitted) {
 
 TEST_P(QuicStreamTest, ReliableSizeNotAckedAtTimeOfResetThenReadSideReset) {
   Initialize();
-  if (!VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   char data[100];
@@ -2046,14 +2049,15 @@ TEST_P(QuicStreamTest, ReliableSizeNotAckedAtTimeOfResetThenReadSideReset) {
   EXPECT_CALL(*stream_, OnWriteSideInDataRecvdState()).Times(1);
   EXPECT_CALL(*connection_, OnStreamReset(stream_->id(), _)).Times(1);
   stream_->OnStreamFrameAcked(0, 100, false, QuicTime::Delta::Zero(),
-                              QuicTime::Zero(), &newly_acked_length);
+                              QuicTime::Zero(), &newly_acked_length,
+                              /*is_retransmission=*/false);
   ASSERT_EQ(closed_streams->size(), 1);
   EXPECT_EQ((*(closed_streams->begin()))->id(), stream_->id());
 }
 
 TEST_P(QuicStreamTest, ReliableSizeNotAckedAtTimeOfResetThenReadSideFin) {
   Initialize();
-  if (!VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   char data[100];
@@ -2079,7 +2083,8 @@ TEST_P(QuicStreamTest, ReliableSizeNotAckedAtTimeOfResetThenReadSideFin) {
   EXPECT_CALL(*stream_, OnWriteSideInDataRecvdState()).Times(1);
   EXPECT_CALL(*connection_, OnStreamReset(stream_->id(), _)).Times(1);
   stream_->OnStreamFrameAcked(0, 100, false, QuicTime::Delta::Zero(),
-                              QuicTime::Zero(), &newly_acked_length);
+                              QuicTime::Zero(), &newly_acked_length,
+                              /*is_retransmission=*/false);
   ASSERT_TRUE(closed_streams->empty());
   // The rest of the stream arrives.
   EXPECT_CALL(*stream_, OnDataAvailable()).WillOnce([&]() {
@@ -2100,7 +2105,7 @@ TEST_P(QuicStreamTest, ReliableSizeNotAckedAtTimeOfResetThenReadSideFin) {
 
 TEST_P(QuicStreamTest, ReliableSizeAckedAtTimeOfReset) {
   Initialize();
-  if (!VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   EXPECT_CALL(*session_, WritevData(_, _, _, _, _, _))
@@ -2110,7 +2115,8 @@ TEST_P(QuicStreamTest, ReliableSizeAckedAtTimeOfReset) {
   SendApplicationData(data, 100, false);
   QuicByteCount newly_acked_length = 0;
   stream_->OnStreamFrameAcked(0, 100, false, QuicTime::Delta::Zero(),
-                              QuicTime::Zero(), &newly_acked_length);
+                              QuicTime::Zero(), &newly_acked_length,
+                              /*is_retransmission=*/false);
   EXPECT_CALL(*session_, MaybeSendResetStreamAtFrame(_, _, _, _)).Times(1);
   EXPECT_TRUE(stream_->SetReliableSize());
   EXPECT_CALL(*connection_, OnStreamReset(stream_->id(), _)).Times(1);
@@ -2120,7 +2126,7 @@ TEST_P(QuicStreamTest, ReliableSizeAckedAtTimeOfReset) {
 
 TEST_P(QuicStreamTest, BufferedDataInReliableSize) {
   Initialize();
-  if (!VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   EXPECT_CALL(*session_, WritevData(stream_->id(), 100, 0, _, _, _))
@@ -2144,12 +2150,13 @@ TEST_P(QuicStreamTest, BufferedDataInReliableSize) {
   EXPECT_CALL(*connection_, OnStreamReset(stream_->id(), _)).Times(1);
   QuicByteCount newly_acked_length = 0;
   stream_->OnStreamFrameAcked(0, 100, false, QuicTime::Delta::Zero(),
-                              QuicTime::Zero(), &newly_acked_length);
+                              QuicTime::Zero(), &newly_acked_length,
+                              /*is_retransmission=*/false);
 }
 
 TEST_P(QuicStreamTest, ReliableSizeIsFinOffset) {
   Initialize();
-  if (!VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   EXPECT_CALL(*session_, WritevData(_, 100, 0, FIN, _, _))
@@ -2173,7 +2180,7 @@ TEST_P(QuicStreamTest, ReliableSizeIsFinOffset) {
 
 TEST_P(QuicStreamTest, DataAfterResetStreamAt) {
   Initialize();
-  if (!VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   char data[100];
@@ -2193,7 +2200,7 @@ TEST_P(QuicStreamTest, DataAfterResetStreamAt) {
 
 TEST_P(QuicStreamTest, SetReliableSizeOnUnidirectionalRead) {
   Initialize();
-  if (!VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   QuicStreamId stream_id = QuicUtils::GetFirstUnidirectionalStreamId(
@@ -2206,7 +2213,7 @@ TEST_P(QuicStreamTest, SetReliableSizeOnUnidirectionalRead) {
 // stream is cleaned up.
 TEST_P(QuicStreamTest, ResetStreamAtUnidirectionalWrite) {
   Initialize();
-  if (!VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   const QuicStreamId kId = 3;
@@ -2228,7 +2235,8 @@ TEST_P(QuicStreamTest, ResetStreamAtUnidirectionalWrite) {
   ;
   QuicByteCount newly_acked_length = 0;
   stream_ptr->OnStreamFrameAcked(0, 100, false, QuicTime::Delta::Zero(),
-                                 QuicTime::Zero(), &newly_acked_length);
+                                 QuicTime::Zero(), &newly_acked_length,
+                                 /*is_retransmission=*/false);
   std::vector<std::unique_ptr<QuicStream>>* closed_streams =
       session_->ClosedStreams();
   ASSERT_EQ(closed_streams->size(), 1);
@@ -2239,7 +2247,7 @@ TEST_P(QuicStreamTest, ResetStreamAtUnidirectionalWrite) {
 // zombie stream is cleaned up.
 TEST_P(QuicStreamTest, ResetStreamAtReadSideFin) {
   Initialize();
-  if (!VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   // Fin the read side.
@@ -2260,7 +2268,8 @@ TEST_P(QuicStreamTest, ResetStreamAtReadSideFin) {
   EXPECT_CALL(*connection_, OnStreamReset(stream_id, _)).Times(1);
   QuicByteCount newly_acked_length = 0;
   stream_->OnStreamFrameAcked(0, 100, false, QuicTime::Delta::Zero(),
-                              QuicTime::Zero(), &newly_acked_length);
+                              QuicTime::Zero(), &newly_acked_length,
+                              /*is_retransmission=*/false);
   std::vector<std::unique_ptr<QuicStream>>* closed_streams =
       session_->ClosedStreams();
   ASSERT_EQ(closed_streams->size(), 1);
@@ -2269,7 +2278,7 @@ TEST_P(QuicStreamTest, ResetStreamAtReadSideFin) {
 
 TEST_P(QuicStreamTest, ResetStreamAtAfterStopSending) {
   Initialize();
-  if (!VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   char data[100];
@@ -2285,7 +2294,7 @@ TEST_P(QuicStreamTest, ResetStreamAtAfterStopSending) {
 
 TEST_P(QuicStreamTest, RejectReliableSizeOldVersion) {
   Initialize();
-  if (VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   char data[100];
@@ -2298,7 +2307,7 @@ TEST_P(QuicStreamTest, RejectReliableSizeOldVersion) {
 
 TEST_P(QuicStreamTest, RejectReliableSizeReadOnlyStream) {
   Initialize();
-  if (!VersionHasIetfQuicFrames(session_->transport_version())) {
+  if (!VersionIsIetfQuic(session_->transport_version())) {
     return;
   }
   auto uni = new StrictMock<TestStream>(6, session_.get(), READ_UNIDIRECTIONAL);

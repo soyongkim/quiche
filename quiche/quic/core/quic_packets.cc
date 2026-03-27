@@ -5,7 +5,9 @@
 #include "quiche/quic/core/quic_packets.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <utility>
@@ -14,10 +16,12 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "quiche/quic/core/quic_connection_id.h"
+#include "quiche/quic/core/quic_constants.h"
 #include "quiche/quic/core/quic_types.h"
 #include "quiche/quic/core/quic_utils.h"
 #include "quiche/quic/core/quic_versions.h"
 #include "quiche/quic/platform/api/quic_flags.h"
+#include "quiche/common/platform/api/quiche_logging.h"
 
 namespace quic {
 
@@ -118,13 +122,13 @@ size_t GetPacketHeaderSize(
     if (include_diversification_nonce) {
       size += kDiversificationNonceSize;
     }
-    if (VersionHasLengthPrefixedConnectionIds(version)) {
+    if (VersionIsIetfQuic(version)) {
       size += kConnectionIdLengthSize;
     }
     QUICHE_DCHECK(
-        QuicVersionHasLongHeaderLengths(version) ||
+        VersionIsIetfQuic(version) ||
         retry_token_length_length + retry_token_length + length_length == 0);
-    if (QuicVersionHasLongHeaderLengths(version)) {
+    if (VersionIsIetfQuic(version)) {
       size += retry_token_length_length + retry_token_length + length_length;
     }
     return size;
@@ -156,23 +160,23 @@ size_t GetStartOfEncryptedData(
 
 QuicPacketHeader::QuicPacketHeader()
     : destination_connection_id(EmptyQuicConnectionId()),
+      possible_stateless_reset_token({}),
+      packet_number_length(PACKET_4BYTE_PACKET_NUMBER),
+      form(GOOGLE_QUIC_Q043_PACKET),
+      type_byte(0),
       destination_connection_id_included(CONNECTION_ID_PRESENT),
-      source_connection_id(EmptyQuicConnectionId()),
       source_connection_id_included(CONNECTION_ID_ABSENT),
       reset_flag(false),
       version_flag(false),
       has_possible_stateless_reset_token(false),
-      packet_number_length(PACKET_4BYTE_PACKET_NUMBER),
-      type_byte(0),
       version(UnsupportedQuicVersion()),
-      nonce(nullptr),
-      form(GOOGLE_QUIC_PACKET),
-      long_packet_type(INITIAL),
-      possible_stateless_reset_token({}),
-      retry_token_length_length(quiche::VARIABLE_LENGTH_INTEGER_LENGTH_0),
+      source_connection_id(EmptyQuicConnectionId()),
+      remaining_packet_length(0),
       retry_token(absl::string_view()),
+      nonce(nullptr),
+      long_packet_type(INITIAL),
       length_length(quiche::VARIABLE_LENGTH_INTEGER_LENGTH_0),
-      remaining_packet_length(0) {}
+      retry_token_length_length(quiche::VARIABLE_LENGTH_INTEGER_LENGTH_0) {}
 
 QuicPacketHeader::QuicPacketHeader(const QuicPacketHeader& other) = default;
 
@@ -236,7 +240,7 @@ std::ostream& operator<<(std::ostream& os, const QuicPacketHeader& header) {
       os << ", retry_token_length_length: "
          << static_cast<int>(header.retry_token_length_length);
     }
-    if (header.retry_token.length() != 0) {
+    if (!header.retry_token.empty()) {
       os << ", retry_token_length: " << header.retry_token.length();
     }
     if (header.length_length != quiche::VARIABLE_LENGTH_INTEGER_LENGTH_0) {
@@ -358,21 +362,27 @@ QuicReceivedPacket::QuicReceivedPacket(
     : quic::QuicReceivedPacket(buffer, length, receipt_time, owns_buffer, ttl,
                                ttl_valid, packet_headers, headers_length,
                                owns_header_buffer, ecn_codepoint,
+                               /*tos=*/std::nullopt,
                                /*ipv6_flow_label=*/0) {}
 
 QuicReceivedPacket::QuicReceivedPacket(
     const char* buffer, size_t length, QuicTime receipt_time, bool owns_buffer,
     int ttl, bool ttl_valid, char* packet_headers, size_t headers_length,
     bool owns_header_buffer, QuicEcnCodepoint ecn_codepoint,
-    uint32_t ipv6_flow_label)
+    std::optional<uint8_t> tos, uint32_t ipv6_flow_label)
     : QuicEncryptedPacket(buffer, length, owns_buffer),
       receipt_time_(receipt_time),
       ttl_(ttl_valid ? ttl : -1),
       packet_headers_(packet_headers),
       headers_length_(headers_length),
       owns_header_buffer_(owns_header_buffer),
+      tos_(tos),
       ecn_codepoint_(ecn_codepoint),
-      ipv6_flow_label_(ipv6_flow_label) {}
+      ipv6_flow_label_(ipv6_flow_label) {
+  // Explicit Congestion Notification is extracted from the TOS byte.
+  QUICHE_DCHECK(!tos_.has_value() ||
+                QuicEcnCodepoint(*tos_ & kEcnMask) == ecn_codepoint_);
+}
 
 QuicReceivedPacket::~QuicReceivedPacket() {
   if (owns_header_buffer_) {
@@ -437,7 +447,7 @@ SerializedPacket::SerializedPacket(QuicPacketNumber packet_number,
       transmission_type(NOT_RETRANSMISSION),
       has_ack_frame_copy(false),
       has_ack_frequency(false),
-      has_message(false),
+      has_datagram(false),
       fate(SEND_TO_WRITER) {}
 
 SerializedPacket::SerializedPacket(SerializedPacket&& other)
@@ -452,7 +462,7 @@ SerializedPacket::SerializedPacket(SerializedPacket&& other)
       largest_acked(other.largest_acked),
       has_ack_frame_copy(other.has_ack_frame_copy),
       has_ack_frequency(other.has_ack_frequency),
-      has_message(other.has_message),
+      has_datagram(other.has_datagram),
       fate(other.fate),
       peer_address(other.peer_address),
       bytes_not_retransmitted(other.bytes_not_retransmitted),
@@ -500,7 +510,7 @@ SerializedPacket* CopySerializedPacket(const SerializedPacket& serialized,
   copy->transmission_type = serialized.transmission_type;
   copy->largest_acked = serialized.largest_acked;
   copy->has_ack_frequency = serialized.has_ack_frequency;
-  copy->has_message = serialized.has_message;
+  copy->has_datagram = serialized.has_datagram;
   copy->fate = serialized.fate;
   copy->peer_address = serialized.peer_address;
   copy->bytes_not_retransmitted = serialized.bytes_not_retransmitted;
@@ -541,7 +551,7 @@ ReceivedPacketInfo::ReceivedPacketInfo(const QuicSocketAddress& self_address,
     : self_address(self_address),
       peer_address(peer_address),
       packet(packet),
-      form(GOOGLE_QUIC_PACKET),
+      form(GOOGLE_QUIC_Q043_PACKET),
       long_packet_type(INVALID_PACKET_TYPE),
       version_flag(false),
       use_length_prefix(false),

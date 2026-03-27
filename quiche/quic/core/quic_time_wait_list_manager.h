@@ -16,10 +16,10 @@
 #include <vector>
 
 #include "absl/base/nullability.h"
-#include "absl/container/flat_hash_map.h"
 #include "quiche/quic/core/quic_alarm.h"
 #include "quiche/quic/core/quic_alarm_factory.h"
 #include "quiche/quic/core/quic_blocked_writer_interface.h"
+#include "quiche/quic/core/quic_config.h"
 #include "quiche/quic/core/quic_connection_id.h"
 #include "quiche/quic/core/quic_packet_writer.h"
 #include "quiche/quic/core/quic_packets.h"
@@ -27,8 +27,10 @@
 #include "quiche/quic/core/quic_time.h"
 #include "quiche/quic/core/quic_types.h"
 #include "quiche/quic/core/quic_versions.h"
+#include "quiche/quic/platform/api/quic_bug_tracker.h"
 #include "quiche/quic/platform/api/quic_socket_address.h"
 #include "quiche/common/platform/api/quiche_export.h"
+#include "quiche/common/platform/api/quiche_reference_counted.h"
 #include "quiche/common/quiche_circular_deque.h"
 #include "quiche/common/quiche_linked_hash_map.h"
 
@@ -93,6 +95,8 @@ class QUICHE_EXPORT QuicTimeWaitListManager
   class QUICHE_EXPORT Visitor : public QuicSession::Visitor {
    public:
     void OnPathDegrading() override {}
+    void OnConfigNegotiated(
+        [[maybe_unused]] const quic::QuicConfig& config) override {}
   };
 
   // writer - the entity that writes to the socket. (Owned by the caller)
@@ -127,11 +131,11 @@ class QUICHE_EXPORT QuicTimeWaitListManager
   // wait state. virtual to override in tests.
   // TODO(fayang): change ProcessPacket and SendPublicReset to take
   // ReceivedPacketInfo.
-  virtual void ProcessPacket(
-      const QuicSocketAddress& self_address,
-      const QuicSocketAddress& peer_address, QuicConnectionId connection_id,
-      PacketHeaderFormat header_format, size_t received_packet_length,
-      std::unique_ptr<QuicPerPacketContext> packet_context);
+  virtual void ProcessPacket(const QuicSocketAddress& self_address,
+                             const QuicSocketAddress& peer_address,
+                             QuicConnectionId connection_id,
+                             PacketHeaderFormat header_format,
+                             size_t received_packet_length);
 
   // Called by the dispatcher when the underlying socket becomes writable again,
   // since we might need to send pending public reset packets which we didn't
@@ -150,9 +154,8 @@ class QUICHE_EXPORT QuicTimeWaitListManager
   // the size is under the configured maximum.
   void TrimTimeWaitListIfNeeded();
 
-  // The number of connections on the time-wait list.
-  size_t num_connections() const { return connection_id_map_.size(); }
-  bool has_connections() const { return !connection_id_map_.empty(); }
+  size_t num_connections() const { return num_connections_; }
+  bool has_connections() const;
 
   // Sends a version negotiation packet for |server_connection_id| and
   // |client_connection_id| announcing support for |supported_versions| to
@@ -162,15 +165,13 @@ class QUICHE_EXPORT QuicTimeWaitListManager
       QuicConnectionId client_connection_id, bool ietf_quic,
       bool use_length_prefix, const ParsedQuicVersionVector& supported_versions,
       const QuicSocketAddress& self_address,
-      const QuicSocketAddress& peer_address,
-      std::unique_ptr<QuicPerPacketContext> packet_context);
+      const QuicSocketAddress& peer_address);
 
   // Creates a public reset packet and sends it or queues it to be sent later.
-  virtual void SendPublicReset(
-      const QuicSocketAddress& self_address,
-      const QuicSocketAddress& peer_address, QuicConnectionId connection_id,
-      bool ietf_quic, size_t received_packet_length,
-      std::unique_ptr<QuicPerPacketContext> packet_context);
+  virtual void SendPublicReset(const QuicSocketAddress& self_address,
+                               const QuicSocketAddress& peer_address,
+                               QuicConnectionId connection_id, bool ietf_quic,
+                               size_t received_packet_length);
 
   // Called to send |packet|.
   virtual void SendPacket(const QuicSocketAddress& self_address,
@@ -222,8 +223,7 @@ class QUICHE_EXPORT QuicTimeWaitListManager
   // Subclasses overriding this method should call this class's base
   // implementation at the end of the override.
   // Return true if |packet| is sent, false if it is queued.
-  virtual bool SendOrQueuePacket(std::unique_ptr<QueuedPacket> packet,
-                                 const QuicPerPacketContext* packet_context);
+  virtual bool SendOrQueuePacket(std::unique_ptr<QueuedPacket> packet);
 
   const quiche::QuicheCircularDeque<std::unique_ptr<QueuedPacket>>&
   pending_packets_queue() const {
@@ -282,42 +282,48 @@ class QUICHE_EXPORT QuicTimeWaitListManager
     TimeWaitConnectionInfo info;
   };
 
+  // TODO(haoyuewang): Merge RefCountedConnectionIdData & ConnectionIdData once
+  // there is no need for ConnectionIdData to be movable. Also removes the
+  // underscore in the constructor parameter names.
+  struct RefCountedConnectionIdData : public ConnectionIdData,
+                                      public quiche::QuicheReferenceCounted {
+    RefCountedConnectionIdData(int _num_packets, QuicTime _time_added,
+                               TimeWaitAction _action,
+                               TimeWaitConnectionInfo _info,
+                               size_t& _num_connections)
+        : ConnectionIdData(_num_packets, _time_added, _action,
+                           std::move(_info)),
+          num_connections(_num_connections) {
+      ++num_connections;
+    }
+
+    ~RefCountedConnectionIdData() {
+      QUIC_BUG_IF(bad_num_connections, num_connections == 0);
+      --num_connections;
+    }
+
+   private:
+    // Reference to the total number of connections counter in the time-wait
+    // list.
+    size_t& num_connections;
+  };
+
   // Returns the time when the first connection was added to the time-wait list.
   QuicTime GetOldestConnectionTime() const;
 
+  size_t num_connections_ = 0;
+
   // QuicheLinkedHashMap allows lookup by ConnectionId
   // and traversal in add order.
-  using ConnectionIdMap =
-      quiche::QuicheLinkedHashMap<QuicConnectionId, ConnectionIdData,
-                                  QuicConnectionIdHash>;
-  // Do not use find/emplace/erase on this map directly. Use
-  // FindConnectionIdDataInMap, AddConnectionIdDateToMap,
-  // RemoveConnectionDataFromMap instead.
-  ConnectionIdMap connection_id_map_;
-
-  // TODO(haoyuewang) Consider making connection_id_map_ a map of shared pointer
-  // and remove the indirect map.
-  // A connection can have multiple unretired ConnectionIds when it is closed.
-  // These Ids have the same ConnectionIdData entry in connection_id_map_. To
-  // find the entry, look up the cannoical ConnectionId in
-  // indirect_connection_id_map_ first, and look up connection_id_map_ with the
-  // cannoical ConnectionId.
-  absl::flat_hash_map<QuicConnectionId, QuicConnectionId, QuicConnectionIdHash>
-      indirect_connection_id_map_;
+  quiche::QuicheLinkedHashMap<
+      QuicConnectionId,
+      quiche::QuicheReferenceCountedPointer<RefCountedConnectionIdData>,
+      QuicConnectionIdHash>
+      connection_id_data_map_;
 
   // Find data for the given connection_id. Returns nullptr if not found.
-  absl::Nullable<ConnectionIdData*> FindConnectionIdData(
+  ConnectionIdData* absl_nullable FindConnectionIdData(
       const QuicConnectionId& connection_id);
-  // Find an iterator for the given connection_id. Returns
-  // connection_id_map_.end() if none found.
-  ConnectionIdMap::iterator FindConnectionIdDataInMap(
-      const QuicConnectionId& connection_id);
-  // Inserts a ConnectionIdData entry to connection_id_map_.
-  void AddConnectionIdDataToMap(const QuicConnectionId& canonical_connection_id,
-                                int num_packets, TimeWaitAction action,
-                                TimeWaitConnectionInfo info);
-  // Removes a ConnectionIdData entry in connection_id_map_.
-  void RemoveConnectionDataFromMap(ConnectionIdMap::iterator it);
 
   // Pending termination packets that need to be sent out to the peer when we
   // are given a chance to write by the dispatcher.

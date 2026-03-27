@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -10,18 +12,25 @@
 #include <vector>
 
 #include "absl/base/macros.h"
+#include "absl/strings/string_view.h"
+#include "openssl/aead.h"
 #include "openssl/hpke.h"
 #include "openssl/ssl.h"
-#include "quiche/quic/core/crypto/quic_decrypter.h"
-#include "quiche/quic/core/crypto/quic_encrypter.h"
+#include "openssl/tls1.h"
+#include "quiche/quic/core/crypto/crypto_handshake_message.h"
+#include "quiche/quic/core/crypto/crypto_protocol.h"
+#include "quiche/quic/core/crypto/proof_verifier.h"
+#include "quiche/quic/core/crypto/quic_compressed_certs_cache.h"
+#include "quiche/quic/core/crypto/quic_crypto_client_config.h"
+#include "quiche/quic/core/crypto/transport_parameters.h"
+#include "quiche/quic/core/quic_connection.h"
+#include "quiche/quic/core/quic_constants.h"
 #include "quiche/quic/core/quic_error_codes.h"
-#include "quiche/quic/core/quic_packets.h"
 #include "quiche/quic/core/quic_server_id.h"
+#include "quiche/quic/core/quic_time.h"
 #include "quiche/quic/core/quic_types.h"
-#include "quiche/quic/core/quic_utils.h"
 #include "quiche/quic/core/quic_versions.h"
 #include "quiche/quic/platform/api/quic_expect_bug.h"
-#include "quiche/quic/platform/api/quic_flags.h"
 #include "quiche/quic/platform/api/quic_test.h"
 #include "quiche/quic/test_tools/crypto_test_utils.h"
 #include "quiche/quic/test_tools/quic_connection_peer.h"
@@ -30,10 +39,11 @@
 #include "quiche/quic/test_tools/quic_test_utils.h"
 #include "quiche/quic/test_tools/simple_session_cache.h"
 #include "quiche/quic/tools/fake_proof_verifier.h"
-#include "quiche/common/test_tools/quiche_test_utils.h"
 
 using testing::_;
+using testing::Eq;
 using testing::HasSubstr;
+using testing::Optional;
 
 namespace quic {
 namespace test {
@@ -222,8 +232,10 @@ class TlsClientHandshakerTest : public QuicTestWithParam<ParsedQuicVersion> {
   }
 
   // Initializes a fake server, and all its associated state, for testing.
-  void InitializeFakeServer() {
+  void InitializeFakeServer(const std::string& trust_anchor_id = "") {
     TestQuicSpdyServerSession* server_session = nullptr;
+    server_crypto_config_ =
+        crypto_test_utils::CryptoServerConfigForTesting(trust_anchor_id);
     CreateServerSessionForTest(
         server_id_, QuicTime::Delta::FromSeconds(100000), supported_versions_,
         &server_helper_, &alarm_factory_, server_crypto_config_.get(),
@@ -299,8 +311,9 @@ TEST_P(TlsClientHandshakerTest, NotInitiallyConnected) {
 
 TEST_P(TlsClientHandshakerTest, ConnectedAfterHandshake) {
   CompleteCryptoHandshake();
-  EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
   EXPECT_TRUE(stream()->encryption_established());
+  EXPECT_FALSE(stream()->MatchedTrustAnchorIdForTesting());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
   EXPECT_FALSE(stream()->IsResumption());
 }
@@ -331,7 +344,7 @@ TEST_P(TlsClientHandshakerTest, ProofVerifyDetailsAvailableAfterHandshake) {
   crypto_test_utils::HandshakeWithFakeServer(
       &config, server_crypto_config_.get(), &server_helper_, &alarm_factory_,
       connection_, stream(), AlpnForVersion(connection_->version()));
-  EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
 }
@@ -363,13 +376,79 @@ TEST_P(TlsClientHandshakerTest, HandshakeWithAsyncProofVerifier) {
   EXPECT_TRUE(stream()->one_rtt_keys_available());
 }
 
+TEST_P(TlsClientHandshakerTest, HandshakeWithTrustAnchorIds) {
+  const std::string kTestTrustAnchorId = {0x03, 0x01, 0x02, 0x03};
+  const std::string kTestServerTrustAnchorId = {0x01, 0x02, 0x03};
+  InitializeFakeServer(kTestServerTrustAnchorId);
+  ssl_config_.emplace();
+  ssl_config_->trust_anchor_ids = kTestTrustAnchorId;
+  CreateConnection();
+  CompleteCryptoHandshake();
+  ASSERT_TRUE(stream()->encryption_established());
+  EXPECT_TRUE(stream()->MatchedTrustAnchorIdForTesting());
+}
+
+// Tests that the client can complete a handshake in which it sends multiple
+// Trust Anchor IDs, one which matches the server's credential and one which
+// doesn't.
+TEST_P(TlsClientHandshakerTest, HandshakeWithMultipleTrustAnchorIds) {
+  // The client sends two trust anchor IDs, the first of which doesn't match the
+  // server's credential and the second does.
+  const std::string kTestTrustAnchorIds = {0x04, 0x00, 0x01, 0x02, 0x03,
+                                           0x03, 0x01, 0x02, 0x03};
+  const std::string kTestServerTrustAnchorId = {0x01, 0x02, 0x03};
+  InitializeFakeServer(kTestServerTrustAnchorId);
+  ssl_config_.emplace();
+  ssl_config_->trust_anchor_ids = kTestTrustAnchorIds;
+  CreateConnection();
+  CompleteCryptoHandshake();
+  ASSERT_TRUE(stream()->encryption_established());
+  EXPECT_TRUE(stream()->MatchedTrustAnchorIdForTesting());
+}
+
+// Tests that the client can complete a handshake in which it sends no Trust
+// Anchor IDs.
+TEST_P(TlsClientHandshakerTest, HandshakeWithEmptyTrustAnchorIdList) {
+  InitializeFakeServer("");
+  ssl_config_.emplace();
+  ssl_config_->trust_anchor_ids.emplace();
+  CreateConnection();
+
+  // Add a DoS callback on the server, to test that the client sent an empty
+  // extension. This is a bit of a hack. TlsServerHandshaker already configures
+  // the certificate selection callback, but does not usefully expose any way
+  // for tests to inspect the ClientHello. So, instead, we register a different
+  // callback that also gets the ClientHello.
+  static bool callback_ran;
+  callback_ran = false;
+  SSL_CTX_set_dos_protection_cb(
+      server_crypto_config_->ssl_ctx(),
+      [](const SSL_CLIENT_HELLO* client_hello) -> int {
+        const uint8_t* data;
+        size_t len;
+        EXPECT_TRUE(SSL_early_callback_ctx_extension_get(
+            client_hello, TLSEXT_TYPE_trust_anchors, &data, &len));
+        // The extension should contain an empty list, i.e. a two-byte encoding
+        // of a zero length.
+        EXPECT_EQ(len, 2u);
+        EXPECT_EQ(data[0], 0x00);
+        EXPECT_EQ(data[1], 0x00);
+        callback_ran = true;
+        return 1;
+      });
+
+  CompleteCryptoHandshake();
+  ASSERT_TRUE(stream()->encryption_established());
+  EXPECT_TRUE(callback_ran);
+}
+
 TEST_P(TlsClientHandshakerTest, Resumption) {
   // Disable 0-RTT on the server so that we're only testing 1-RTT resumption:
   SSL_CTX_set_early_data_enabled(server_crypto_config_->ssl_ctx(), false);
   // Finish establishing the first connection:
   CompleteCryptoHandshake();
 
-  EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
   EXPECT_FALSE(stream()->ResumptionAttempted());
@@ -379,7 +458,7 @@ TEST_P(TlsClientHandshakerTest, Resumption) {
   CreateConnection();
   CompleteCryptoHandshake();
 
-  EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
   EXPECT_TRUE(stream()->ResumptionAttempted());
@@ -393,7 +472,7 @@ TEST_P(TlsClientHandshakerTest, ResumptionRejection) {
   // Finish establishing the first connection:
   CompleteCryptoHandshake();
 
-  EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
   EXPECT_FALSE(stream()->ResumptionAttempted());
@@ -404,7 +483,7 @@ TEST_P(TlsClientHandshakerTest, ResumptionRejection) {
   CreateConnection();
   CompleteCryptoHandshake();
 
-  EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
   EXPECT_TRUE(stream()->ResumptionAttempted());
@@ -418,7 +497,7 @@ TEST_P(TlsClientHandshakerTest, ZeroRttResumption) {
   // Finish establishing the first connection:
   CompleteCryptoHandshake();
 
-  EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
   EXPECT_FALSE(stream()->IsResumption());
@@ -444,7 +523,7 @@ TEST_P(TlsClientHandshakerTest, ZeroRttResumption) {
       &config, server_crypto_config_.get(), &server_helper_, &alarm_factory_,
       connection_, stream(), AlpnForVersion(connection_->version()));
 
-  EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
   EXPECT_TRUE(stream()->IsResumption());
@@ -458,7 +537,7 @@ TEST_P(TlsClientHandshakerTest, ZeroRttResumptionWithAyncProofVerifier) {
   // resume.
   CompleteCryptoHandshake();
 
-  EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
   EXPECT_FALSE(stream()->IsResumption());
@@ -505,7 +584,7 @@ TEST_P(TlsClientHandshakerTest, ZeroRttRejection) {
   // Finish establishing the first connection:
   CompleteCryptoHandshake();
 
-  EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
   EXPECT_FALSE(stream()->IsResumption());
@@ -524,13 +603,13 @@ TEST_P(TlsClientHandshakerTest, ZeroRttRejection) {
   // packet retransmission.
   EXPECT_CALL(*connection_,
               OnPacketSent(ENCRYPTION_INITIAL, NOT_RETRANSMISSION));
-  if (VersionUsesHttp3(session_->transport_version())) {
+  if (VersionIsIetfQuic(session_->transport_version())) {
     EXPECT_CALL(*connection_,
                 OnPacketSent(ENCRYPTION_ZERO_RTT, NOT_RETRANSMISSION));
   }
   EXPECT_CALL(*connection_,
               OnPacketSent(ENCRYPTION_HANDSHAKE, NOT_RETRANSMISSION));
-  if (VersionUsesHttp3(session_->transport_version())) {
+  if (VersionIsIetfQuic(session_->transport_version())) {
     // TODO(b/158027651): change transmission type to
     // ALL_ZERO_RTT_RETRANSMISSION.
     EXPECT_CALL(*connection_,
@@ -542,7 +621,7 @@ TEST_P(TlsClientHandshakerTest, ZeroRttRejection) {
   QuicFramer* framer = QuicConnectionPeer::GetFramer(connection_);
   EXPECT_EQ(nullptr, QuicFramerPeer::GetEncrypter(framer, ENCRYPTION_ZERO_RTT));
 
-  EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
   EXPECT_TRUE(stream()->IsResumption());
@@ -554,7 +633,7 @@ TEST_P(TlsClientHandshakerTest, ZeroRttAndResumptionRejection) {
   // Finish establishing the first connection:
   CompleteCryptoHandshake();
 
-  EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
   EXPECT_FALSE(stream()->IsResumption());
@@ -573,13 +652,13 @@ TEST_P(TlsClientHandshakerTest, ZeroRttAndResumptionRejection) {
   // packet retransmission.
   EXPECT_CALL(*connection_,
               OnPacketSent(ENCRYPTION_INITIAL, NOT_RETRANSMISSION));
-  if (VersionUsesHttp3(session_->transport_version())) {
+  if (VersionIsIetfQuic(session_->transport_version())) {
     EXPECT_CALL(*connection_,
                 OnPacketSent(ENCRYPTION_ZERO_RTT, NOT_RETRANSMISSION));
   }
   EXPECT_CALL(*connection_,
               OnPacketSent(ENCRYPTION_HANDSHAKE, NOT_RETRANSMISSION));
-  if (VersionUsesHttp3(session_->transport_version())) {
+  if (VersionIsIetfQuic(session_->transport_version())) {
     // TODO(b/158027651): change transmission type to
     // ALL_ZERO_RTT_RETRANSMISSION.
     EXPECT_CALL(*connection_,
@@ -591,7 +670,7 @@ TEST_P(TlsClientHandshakerTest, ZeroRttAndResumptionRejection) {
   QuicFramer* framer = QuicConnectionPeer::GetFramer(connection_);
   EXPECT_EQ(nullptr, QuicFramerPeer::GetEncrypter(framer, ENCRYPTION_ZERO_RTT));
 
-  EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
   EXPECT_FALSE(stream()->IsResumption());
@@ -613,7 +692,7 @@ TEST_P(TlsClientHandshakerTest, ClientSendsNoSNI) {
   crypto_test_utils::CommunicateHandshakeMessages(
       connection_, stream(), server_connection_, server_stream());
 
-  EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
 
@@ -671,7 +750,7 @@ TEST_P(TlsClientHandshakerTest, ZeroRTTNotAttemptedOnALPNChange) {
   // Finish establishing the first connection:
   CompleteCryptoHandshake();
 
-  EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
   EXPECT_FALSE(stream()->IsResumption());
@@ -687,7 +766,7 @@ TEST_P(TlsClientHandshakerTest, ZeroRTTNotAttemptedOnALPNChange) {
   EXPECT_CALL(*session_, OnConfigNegotiated()).Times(1);
 
   CompleteCryptoHandshakeWithServerALPN(kTestAlpn);
-  EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
   EXPECT_FALSE(stream()->EarlyDataAccepted());
@@ -707,7 +786,7 @@ TEST_P(TlsClientHandshakerTest, InvalidSNI) {
   crypto_test_utils::CommunicateHandshakeMessages(
       connection_, stream(), server_connection_, server_stream());
 
-  EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
 
@@ -715,7 +794,7 @@ TEST_P(TlsClientHandshakerTest, InvalidSNI) {
 }
 
 TEST_P(TlsClientHandshakerTest, BadTransportParams) {
-  if (!connection_->version().UsesHttp3()) {
+  if (!connection_->version().IsIetfQuic()) {
     return;
   }
   // Finish establishing the first connection:
@@ -761,7 +840,7 @@ TEST_P(TlsClientHandshakerTest, ECH) {
 
   // The handshake should complete and negotiate ECH.
   CompleteCryptoHandshake();
-  EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
   EXPECT_TRUE(stream()->crypto_negotiated_params().encrypted_client_hello);
@@ -785,7 +864,7 @@ TEST_P(TlsClientHandshakerTest, ECHWithConfigAndGREASE) {
   // When both ECH and ECH GREASE are enabled, ECH should take precedence.
   // The handshake should complete and negotiate ECH.
   CompleteCryptoHandshake();
-  EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
   EXPECT_TRUE(stream()->crypto_negotiated_params().encrypted_client_hello);
@@ -860,63 +939,260 @@ TEST_P(TlsClientHandshakerTest, ECHGrease) {
   CompleteCryptoHandshake();
   EXPECT_TRUE(callback_ran);
 
-  EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
   // Sending an ignored ECH GREASE extension does not count as negotiating ECH.
   EXPECT_FALSE(stream()->crypto_negotiated_params().encrypted_client_hello);
 }
 
-#if BORINGSSL_API_VERSION >= 22
-TEST_P(TlsClientHandshakerTest, EnableKyber) {
-  crypto_config_->set_preferred_groups({SSL_GROUP_X25519_KYBER768_DRAFT00});
+// Observes and stores the client's `TransportParameters::debugging_sni` field.
+class DebuggingSniExtractor : public QuicConnectionDebugVisitor {
+ public:
+  void OnTransportParametersSent(const TransportParameters& params) override {
+    debugging_sni_ = params.debugging_sni;
+  }
+
+  std::optional<std::string> debugging_sni() const { return debugging_sni_; }
+
+ private:
+  std::optional<std::string> debugging_sni_;
+};
+
+TEST_P(TlsClientHandshakerTest, DebuggingSniDisabledByECH) {
+  ssl_config_.emplace();
+  bssl::UniquePtr<SSL_ECH_KEYS> ech_keys =
+      MakeTestEchKeys("public-name.example", /*max_name_len=*/64,
+                      &ssl_config_->ech_config_list);
+  ASSERT_TRUE(ech_keys);
+
+  // Configure the server to use the test ECH keys.
+  ASSERT_TRUE(
+      SSL_CTX_set1_ech_keys(server_crypto_config_->ssl_ctx(), ech_keys.get()));
+
+  // Recreate the client to pick up the new `ssl_config_`.
+  CreateConnection();
+  session_->config()->SetDebuggingSniToSend("secret.example");
+
+  DebuggingSniExtractor debug_visitor;
+  connection_->set_debug_visitor(&debug_visitor);
+
+  // The handshake should complete and negotiate ECH.
+  CompleteCryptoHandshake();
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
+  EXPECT_TRUE(stream()->encryption_established());
+  EXPECT_TRUE(stream()->one_rtt_keys_available());
+  EXPECT_TRUE(stream()->crypto_negotiated_params().encrypted_client_hello);
+
+  EXPECT_EQ(debug_visitor.debugging_sni(), std::nullopt);
+}
+
+TEST_P(TlsClientHandshakerTest, DebuggingSniDisabledByECHAndNotSavedByDSNI) {
+  ssl_config_.emplace();
+  bssl::UniquePtr<SSL_ECH_KEYS> ech_keys =
+      MakeTestEchKeys("public-name.example", /*max_name_len=*/64,
+                      &ssl_config_->ech_config_list);
+  ASSERT_TRUE(ech_keys);
+
+  // Configure the server to use the test ECH keys.
+  ASSERT_TRUE(
+      SSL_CTX_set1_ech_keys(server_crypto_config_->ssl_ctx(), ech_keys.get()));
+
+  // Recreate the client to pick up the new `ssl_config_`.
+  CreateConnection();
+  session_->config()->SetDebuggingSniToSend("secret.example");
+  session_->config()->AddConnectionOptionsToSend({kDSNI});
+
+  DebuggingSniExtractor debug_visitor;
+  connection_->set_debug_visitor(&debug_visitor);
+
+  // The handshake should complete and negotiate ECH.
+  CompleteCryptoHandshake();
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
+  EXPECT_TRUE(stream()->encryption_established());
+  EXPECT_TRUE(stream()->one_rtt_keys_available());
+  EXPECT_TRUE(stream()->crypto_negotiated_params().encrypted_client_hello);
+
+  EXPECT_EQ(debug_visitor.debugging_sni(), std::nullopt);
+}
+
+TEST_P(TlsClientHandshakerTest, DebuggingSniDisabledByECHGrease) {
+  ssl_config_.emplace();
+  ssl_config_->ech_grease_enabled = true;
+  CreateConnection();
+  session_->config()->SetDebuggingSniToSend("secret.example");
+
+  DebuggingSniExtractor debug_visitor;
+  connection_->set_debug_visitor(&debug_visitor);
+
+  stream()->CryptoConnect();
+
+  // Add a DoS callback on the server, to test that the client sent a GREASE
+  // message. This is a bit of a hack. TlsServerHandshaker already configures
+  // the certificate selection callback, but does not usefully expose any way
+  // for tests to inspect the ClientHello. So, instead, we register a different
+  // callback that also gets the ClientHello.
+  static bool callback_ran;
+  callback_ran = false;
+  SSL_CTX_set_dos_protection_cb(
+      server_crypto_config_->ssl_ctx(),
+      [](const SSL_CLIENT_HELLO* client_hello) -> int {
+        const uint8_t* data;
+        size_t len;
+        EXPECT_TRUE(SSL_early_callback_ctx_extension_get(
+            client_hello, TLSEXT_TYPE_encrypted_client_hello, &data, &len));
+        callback_ran = true;
+        return 1;
+      });
+
+  CompleteCryptoHandshake();
+  EXPECT_TRUE(callback_ran);
+
+  EXPECT_EQ(debug_visitor.debugging_sni(), std::nullopt);
+}
+
+TEST_P(TlsClientHandshakerTest, DebuggingSniDisabledByECHGreaseButSavedByDSNI) {
+  ssl_config_.emplace();
+  ssl_config_->ech_grease_enabled = true;
+  CreateConnection();
+  session_->config()->SetDebuggingSniToSend("secret.example");
+  session_->config()->AddConnectionOptionsToSend({kDSNI});
+
+  DebuggingSniExtractor debug_visitor;
+  connection_->set_debug_visitor(&debug_visitor);
+
+  stream()->CryptoConnect();
+
+  // Add a DoS callback on the server, to test that the client sent a GREASE
+  // message. This is a bit of a hack. TlsServerHandshaker already configures
+  // the certificate selection callback, but does not usefully expose any way
+  // for tests to inspect the ClientHello. So, instead, we register a different
+  // callback that also gets the ClientHello.
+  static bool callback_ran;
+  callback_ran = false;
+  SSL_CTX_set_dos_protection_cb(
+      server_crypto_config_->ssl_ctx(),
+      [](const SSL_CLIENT_HELLO* client_hello) -> int {
+        const uint8_t* data;
+        size_t len;
+        EXPECT_TRUE(SSL_early_callback_ctx_extension_get(
+            client_hello, TLSEXT_TYPE_encrypted_client_hello, &data, &len));
+        callback_ran = true;
+        return 1;
+      });
+
+  CompleteCryptoHandshake();
+  EXPECT_TRUE(callback_ran);
+
+  EXPECT_EQ(debug_visitor.debugging_sni(), "secret.example");
+}
+
+TEST_P(TlsClientHandshakerTest, DebuggingSniSentWithoutECH) {
+  CreateConnection();
+  session_->config()->SetDebuggingSniToSend("secret.example");
+
+  DebuggingSniExtractor debug_visitor;
+  connection_->set_debug_visitor(&debug_visitor);
+
+  CompleteCryptoHandshake();
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
+  EXPECT_TRUE(stream()->encryption_established());
+  EXPECT_TRUE(stream()->one_rtt_keys_available());
+  EXPECT_FALSE(stream()->crypto_negotiated_params().encrypted_client_hello);
+
+  EXPECT_THAT(debug_visitor.debugging_sni(), Optional(Eq("secret.example")));
+}
+
+TEST_P(TlsClientHandshakerTest, EnableMLKEM) {
+  crypto_config_->set_preferred_groups({SSL_GROUP_X25519_MLKEM768});
   server_crypto_config_->set_preferred_groups(
-      {SSL_GROUP_X25519_KYBER768_DRAFT00, SSL_GROUP_X25519, SSL_GROUP_SECP256R1,
+      {SSL_GROUP_X25519_MLKEM768, SSL_GROUP_X25519, SSL_GROUP_SECP256R1,
        SSL_GROUP_SECP384R1});
   CreateConnection();
 
   CompleteCryptoHandshake();
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
-  EXPECT_EQ(SSL_GROUP_X25519_KYBER768_DRAFT00,
-            SSL_get_group_id(stream()->GetSsl()));
+  EXPECT_EQ(SSL_GROUP_X25519_MLKEM768, SSL_get_group_id(stream()->GetSsl()));
 }
-#endif  // BORINGSSL_API_VERSION
 
-#if BORINGSSL_API_VERSION >= 27
 TEST_P(TlsClientHandshakerTest, EnableClientAlpsUseNewCodepoint) {
-  // The intent of this test is to demonstrate no matter whether server
-  // allows the new ALPS codepoint or not, the handshake should complete
+  // The intent of this test is to demonstrate the handshake should complete
   // successfully.
-  for (bool server_allow_alps_new_codepoint : {true, false}) {
-    SCOPED_TRACE(absl::StrCat("Test allows alps new codepoint:",
-                              server_allow_alps_new_codepoint));
-    crypto_config_->set_alps_use_new_codepoint(true);
-    SetQuicReloadableFlag(quic_gfe_allow_alps_new_codepoint,
-                          server_allow_alps_new_codepoint);
-    CreateConnection();
+  SCOPED_TRACE("Test allows alps new codepoint.");
+  crypto_config_->set_alps_use_new_codepoint(true);
+  CreateConnection();
 
-    // Add a DoS callback on the server, to test that the client sent the new
-    // ALPS codepoint.
-    static bool callback_ran;
-    callback_ran = false;
-    SSL_CTX_set_dos_protection_cb(
-        server_crypto_config_->ssl_ctx(),
-        [](const SSL_CLIENT_HELLO* client_hello) -> int {
-          const uint8_t* data;
-          size_t len;
-          EXPECT_TRUE(SSL_early_callback_ctx_extension_get(
-              client_hello, TLSEXT_TYPE_application_settings, &data, &len));
-          callback_ran = true;
-          return 1;
-        });
+  // Add a DoS callback on the server, to test that the client sent the new
+  // ALPS codepoint.
+  static bool callback_ran;
+  callback_ran = false;
+  SSL_CTX_set_dos_protection_cb(
+      server_crypto_config_->ssl_ctx(),
+      [](const SSL_CLIENT_HELLO* client_hello) -> int {
+        const uint8_t* data;
+        size_t len;
+        EXPECT_TRUE(SSL_early_callback_ctx_extension_get(
+            client_hello, TLSEXT_TYPE_application_settings, &data, &len));
+        callback_ran = true;
+        return 1;
+      });
 
-    CompleteCryptoHandshake();
-    EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
-    EXPECT_TRUE(callback_ran);
+  CompleteCryptoHandshake();
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
+  EXPECT_TRUE(callback_ran);
+}
+
+#if BORINGSSL_API_VERSION >= 37
+TEST_P(TlsClientHandshakerTest, SpecifyClientKeyShares) {
+  crypto_config_->set_preferred_groups(
+      {SSL_GROUP_X25519_MLKEM768, SSL_GROUP_X25519, SSL_GROUP_SECP256R1});
+  crypto_config_->set_client_key_shares({SSL_GROUP_SECP256R1});
+  server_crypto_config_->set_preferred_groups({SSL_GROUP_SECP256R1});
+  CreateConnection();
+
+  // Only one ClientHello is needed because the client specified a key_share
+  // that the server prefers.
+  EXPECT_CALL(*connection_,
+              OnPacketSent(ENCRYPTION_INITIAL, NOT_RETRANSMISSION))
+      .Times(1);
+  EXPECT_CALL(*connection_,
+              OnPacketSent(ENCRYPTION_HANDSHAKE, NOT_RETRANSMISSION))
+      .Times(1);
+  EXPECT_CALL(*connection_,
+              OnPacketSent(ENCRYPTION_FORWARD_SECURE, NOT_RETRANSMISSION))
+      .Times(1);
+  CompleteCryptoHandshake();
+  EXPECT_TRUE(stream()->encryption_established());
+  EXPECT_TRUE(stream()->one_rtt_keys_available());
+  EXPECT_EQ(stream()->crypto_negotiated_params().key_exchange_group,
+            SSL_GROUP_SECP256R1);
+}
+#endif  // BORINGSSL_API_VERSION >= 37
+
+TEST_P(TlsClientHandshakerTest, SetCompliancePolicyCnsa202407) {
+  crypto_config_->set_ssl_compliance_policy(ssl_compliance_policy_cnsa_202407);
+  CreateConnection();
+  CompleteCryptoHandshake();
+  EXPECT_TRUE(stream()->version().IsIetfQuic());
+  EXPECT_TRUE(stream()->encryption_established());
+  EXPECT_TRUE(stream()->one_rtt_keys_available());
+  ASSERT_TRUE(stream()->SslCompliancePolicyForTesting().has_value());
+  EXPECT_EQ(stream()->SslCompliancePolicyForTesting().value(),
+            ssl_compliance_policy_cnsa_202407);
+  // This EXPECT_EQ checks that having set the client-side compliance policy
+  // results in a negotiated cipher that reflects the policy-specified
+  // preference order. If ChaCha is preferred over AES on the server due to not
+  // having AES hardware support (such as in MSan builds, where assembly code is
+  // disabled), then the client-side preference for AES-256 over AES-128 won't
+  // influence the negotiated cipher.  Skip this expectation in that case.
+  if (EVP_has_aes_hardware() == 1) {
+    // AES-256 is only preferred over the default AES-128 under the CNSA 202407
+    // policy.
+    EXPECT_EQ(stream()->crypto_negotiated_params().cipher_suite,
+              TLS1_3_CK_AES_256_GCM_SHA384 & 0xffff);
   }
 }
-#endif  // BORINGSSL_API_VERSION
 
 }  // namespace
 }  // namespace test

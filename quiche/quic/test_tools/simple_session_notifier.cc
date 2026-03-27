@@ -4,13 +4,13 @@
 
 #include "quiche/quic/test_tools/simple_session_notifier.h"
 
+#include "quiche/quic/core/frames/quic_ack_frequency_frame.h"
 #include "quiche/quic/core/frames/quic_frame.h"
 #include "quiche/quic/core/frames/quic_reset_stream_at_frame.h"
 #include "quiche/quic/core/quic_error_codes.h"
 #include "quiche/quic/core/quic_types.h"
 #include "quiche/quic/core/quic_utils.h"
 #include "quiche/quic/platform/api/quic_logging.h"
-#include "quiche/quic/test_tools/quic_test_utils.h"
 
 namespace quic {
 
@@ -170,11 +170,12 @@ void SimpleSessionNotifier::WriteOrBufferAckFrequency(
   const bool had_buffered_data =
       HasBufferedStreamData() || HasBufferedControlFrames();
   QuicControlFrameId control_frame_id = ++last_control_frame_id_;
-  control_frames_.emplace_back((
-      QuicFrame(new QuicAckFrequencyFrame(control_frame_id,
-                                          /*sequence_number=*/control_frame_id,
-                                          ack_frequency_frame.packet_tolerance,
-                                          ack_frequency_frame.max_ack_delay))));
+  control_frames_.emplace_back((QuicFrame(
+      new QuicAckFrequencyFrame(control_frame_id,
+                                /*sequence_number=*/control_frame_id,
+                                ack_frequency_frame.ack_eliciting_threshold,
+                                ack_frequency_frame.requested_max_ack_delay,
+                                ack_frequency_frame.reordering_threshold))));
   if (had_buffered_data) {
     QUIC_DLOG(WARNING) << "Connection is write blocked";
     return;
@@ -183,12 +184,12 @@ void SimpleSessionNotifier::WriteOrBufferAckFrequency(
 }
 
 void SimpleSessionNotifier::NeuterUnencryptedData() {
-  if (QuicVersionUsesCryptoFrames(connection_->transport_version())) {
+  if (VersionIsIetfQuic(connection_->transport_version())) {
     for (const auto& interval : crypto_bytes_transferred_[ENCRYPTION_INITIAL]) {
       QuicCryptoFrame crypto_frame(ENCRYPTION_INITIAL, interval.min(),
                                    interval.max() - interval.min());
       OnFrameAcked(QuicFrame(&crypto_frame), QuicTime::Delta::Zero(),
-                   QuicTime::Zero());
+                   QuicTime::Zero(), /*is_retransmission=*/false);
     }
     return;
   }
@@ -197,7 +198,7 @@ void SimpleSessionNotifier::NeuterUnencryptedData() {
         QuicUtils::GetCryptoStreamId(connection_->transport_version()), false,
         interval.min(), interval.max() - interval.min());
     OnFrameAcked(QuicFrame(stream_frame), QuicTime::Delta::Zero(),
-                 QuicTime::Zero());
+                 QuicTime::Zero(), /*is_retransmission=*/false);
   }
 }
 
@@ -284,7 +285,8 @@ QuicByteCount SimpleSessionNotifier::StreamBytesToSend() const {
 
 bool SimpleSessionNotifier::OnFrameAcked(const QuicFrame& frame,
                                          QuicTime::Delta /*ack_delay_time*/,
-                                         QuicTime /*receive_timestamp*/) {
+                                         QuicTime /*receive_timestamp*/,
+                                         bool /*is_retransmission*/) {
   QUIC_DVLOG(1) << "Acking " << frame;
   if (frame.type == CRYPTO_FRAME) {
     StreamState* state = &crypto_state_[frame.crypto_frame->level];
@@ -488,7 +490,7 @@ bool SimpleSessionNotifier::IsFrameOutstanding(const QuicFrame& frame) const {
 }
 
 bool SimpleSessionNotifier::HasUnackedCryptoData() const {
-  if (QuicVersionUsesCryptoFrames(connection_->transport_version())) {
+  if (VersionIsIetfQuic(connection_->transport_version())) {
     for (size_t i = 0; i < NUM_ENCRYPTION_LEVELS; ++i) {
       const StreamState& state = crypto_state_[i];
       if (state.bytes_total > state.bytes_sent) {
@@ -592,7 +594,7 @@ bool SimpleSessionNotifier::RetransmitLostControlFrames() {
 }
 
 bool SimpleSessionNotifier::RetransmitLostCryptoData() {
-  if (QuicVersionUsesCryptoFrames(connection_->transport_version())) {
+  if (VersionIsIetfQuic(connection_->transport_version())) {
     for (EncryptionLevel level :
          {ENCRYPTION_INITIAL, ENCRYPTION_HANDSHAKE, ENCRYPTION_ZERO_RTT,
           ENCRYPTION_FORWARD_SECURE}) {

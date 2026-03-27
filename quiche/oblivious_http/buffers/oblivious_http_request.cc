@@ -11,12 +11,16 @@
 #include "absl/memory/memory.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/escaping.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "openssl/hpke.h"
 #include "quiche/common/platform/api/quiche_bug_tracker.h"
 #include "quiche/common/platform/api/quiche_logging.h"
 #include "quiche/common/quiche_crypto_logging.h"
+#include "quiche/common/quiche_data_reader.h"
+#include "quiche/oblivious_http/common/oblivious_http_definitions.h"
+#include "quiche/oblivious_http/common/oblivious_http_header_key_config.h"
 
 namespace quiche {
 // Ctor.
@@ -30,7 +34,7 @@ ObliviousHttpRequest::ObliviousHttpRequest(
     bssl::UniquePtr<EVP_HPKE_CTX> hpke_context, std::string encapsulated_key,
     const ObliviousHttpHeaderKeyConfig& ohttp_key_config,
     std::string req_ciphertext, std::string req_plaintext)
-    : oblivious_http_request_context_(absl::make_optional(
+    : oblivious_http_request_context_(std::make_optional(
           Context(std::move(hpke_context), std::move(encapsulated_key)))),
       key_config_(ohttp_key_config),
       request_ciphertext_(std::move(req_ciphertext)),
@@ -42,39 +46,12 @@ ObliviousHttpRequest::CreateServerObliviousRequest(
     absl::string_view encrypted_data, const EVP_HPKE_KEY& gateway_key,
     const ObliviousHttpHeaderKeyConfig& ohttp_key_config,
     absl::string_view request_label) {
-  if (EVP_HPKE_KEY_kem(&gateway_key) == nullptr) {
-    return absl::InvalidArgumentError(
-        "Invalid input param. Failed to import gateway_key.");
-  }
-  bssl::UniquePtr<EVP_HPKE_CTX> gateway_ctx(EVP_HPKE_CTX_new());
-  if (gateway_ctx == nullptr) {
-    return SslErrorAsStatus("Failed to initialize Gateway/Server's Context.");
-  }
-
   QuicheDataReader reader(encrypted_data);
-
-  auto is_hdr_ok = ohttp_key_config.ParseOhttpPayloadHeader(reader);
-  if (!is_hdr_ok.ok()) {
-    return is_hdr_ok;
-  }
-
-  size_t enc_key_len = EVP_HPKE_KEM_enc_len(EVP_HPKE_KEY_kem(&gateway_key));
-
-  absl::string_view enc_key_received;
-  if (!reader.ReadStringPiece(&enc_key_received, enc_key_len)) {
-    return absl::FailedPreconditionError(absl::StrCat(
-        "Failed to extract encapsulation key of expected len=", enc_key_len,
-        "from payload."));
-  }
-  std::string info =
-      ohttp_key_config.SerializeRecipientContextInfo(request_label);
-  if (!EVP_HPKE_CTX_setup_recipient(
-          gateway_ctx.get(), &gateway_key, ohttp_key_config.GetHpkeKdf(),
-          ohttp_key_config.GetHpkeAead(),
-          reinterpret_cast<const uint8_t*>(enc_key_received.data()),
-          enc_key_received.size(),
-          reinterpret_cast<const uint8_t*>(info.data()), info.size())) {
-    return SslErrorAsStatus("Failed to setup recipient context");
+  absl::StatusOr<ObliviousHttpRequest::Context> gateway_context =
+      ObliviousHttpRequest::DecodeEncapsulatedRequestHeader(
+          reader, gateway_key, ohttp_key_config, request_label);
+  if (!gateway_context.ok()) {
+    return gateway_context.status();
   }
 
   absl::string_view ciphertext_received = reader.ReadRemainingPayload();
@@ -82,8 +59,9 @@ ObliviousHttpRequest::CreateServerObliviousRequest(
   std::string decrypted(ciphertext_received.size(), '\0');
   size_t decrypted_len;
   if (!EVP_HPKE_CTX_open(
-          gateway_ctx.get(), reinterpret_cast<uint8_t*>(decrypted.data()),
-          &decrypted_len, decrypted.size(),
+          gateway_context->hpke_context_.get(),
+          reinterpret_cast<uint8_t*>(decrypted.data()), &decrypted_len,
+          decrypted.size(),
           reinterpret_cast<const uint8_t*>(ciphertext_received.data()),
           ciphertext_received.size(), nullptr, 0)) {
     return SslErrorAsStatus("Failed to decrypt.",
@@ -91,7 +69,8 @@ ObliviousHttpRequest::CreateServerObliviousRequest(
   }
   decrypted.resize(decrypted_len);
   return ObliviousHttpRequest(
-      std::move(gateway_ctx), std::string(enc_key_received), ohttp_key_config,
+      std::move(gateway_context->hpke_context_),
+      std::string(gateway_context->encapsulated_key_), ohttp_key_config,
       std::string(ciphertext_received), std::move(decrypted));
 }
 
@@ -122,10 +101,31 @@ absl::StatusOr<ObliviousHttpRequest> ObliviousHttpRequest::EncapsulateWithSeed(
   if (plaintext_payload.empty() || hpke_public_key.empty()) {
     return absl::InvalidArgumentError("Invalid input.");
   }
-  // Initialize HPKE key and context.
-  bssl::UniquePtr<EVP_HPKE_KEY> client_key(EVP_HPKE_KEY_new());
-  if (client_key == nullptr) {
-    return SslErrorAsStatus("Failed to initialize HPKE Client Key.");
+  absl::StatusOr<Context> context = CreateHpkeSenderContext(
+      hpke_public_key, ohttp_key_config, seed, request_label);
+  if (!context.ok()) {
+    return context.status();
+  }
+  std::string encapsulated_key = context->encapsulated_key_;
+  // EncryptChunk with `is_final_chunk` set to false is the same implementation
+  // as encrypting the full request.
+  absl::StatusOr<std::string> ciphertext =
+      EncryptChunk(plaintext_payload, *context, /*is_final_chunk=*/false);
+  if (!ciphertext.ok()) {
+    return ciphertext.status();
+  }
+  return ObliviousHttpRequest(
+      std::move(context->hpke_context_), std::move(encapsulated_key),
+      ohttp_key_config, std::move(*ciphertext), std::move(plaintext_payload));
+}
+
+absl::StatusOr<ObliviousHttpRequest::Context>
+ObliviousHttpRequest::CreateHpkeSenderContext(
+    absl::string_view hpke_public_key,
+    const ObliviousHttpHeaderKeyConfig& ohttp_key_config,
+    absl::string_view seed, absl::string_view request_label) {
+  if (hpke_public_key.empty()) {
+    return absl::InvalidArgumentError("HPKE public key is empty.");
   }
   bssl::UniquePtr<EVP_HPKE_CTX> client_ctx(EVP_HPKE_CTX_new());
   if (client_ctx == nullptr) {
@@ -165,35 +165,50 @@ absl::StatusOr<ObliviousHttpRequest> ObliviousHttpRequest::EncapsulateWithSeed(
     }
   }
   encapsulated_key.resize(enc_len);
+
+  return Context(std::move(client_ctx), std::move(encapsulated_key));
+}
+
+absl::StatusOr<std::string> ObliviousHttpRequest::EncryptChunk(
+    absl::string_view plaintext_payload, const Context& context,
+    bool is_final_chunk) {
+  if (plaintext_payload.empty() && !is_final_chunk) {
+    return absl::InvalidArgumentError("Invalid input.");
+  }
+
+  uint8_t* ad = nullptr;
+  size_t ad_len = 0;
+  if (is_final_chunk) {
+    ad = const_cast<uint8_t*>(kFinalAdBytes);
+    ad_len = sizeof(kFinalAdBytes);
+  }
+
   std::string ciphertext(
-      plaintext_payload.size() + EVP_HPKE_CTX_max_overhead(client_ctx.get()),
+      plaintext_payload.size() +
+          EVP_HPKE_CTX_max_overhead(context.hpke_context_.get()),
       '\0');
   size_t ciphertext_len;
   if (!EVP_HPKE_CTX_seal(
-          client_ctx.get(), reinterpret_cast<uint8_t*>(ciphertext.data()),
-          &ciphertext_len, ciphertext.size(),
+          context.hpke_context_.get(),
+          reinterpret_cast<uint8_t*>(ciphertext.data()), &ciphertext_len,
+          ciphertext.size(),
           reinterpret_cast<const uint8_t*>(plaintext_payload.data()),
-          plaintext_payload.size(), nullptr, 0)) {
-    return SslErrorAsStatus(
-        "Failed to encrypt plaintext_payload with given public key param "
-        "hpke_public_key.");
+          plaintext_payload.size(), ad, ad_len)) {
+    return SslErrorAsStatus("Failed to encrypt plaintext_payload.");
   }
   ciphertext.resize(ciphertext_len);
-  if (encapsulated_key.empty() || ciphertext.empty()) {
+  if (context.encapsulated_key_.empty() || ciphertext.empty()) {
     return absl::InternalError(absl::StrCat(
-        "Failed to generate required data: ",
-        (encapsulated_key.empty() ? "encapsulated key is empty" : ""),
-        (ciphertext.empty() ? "encrypted data is empty" : ""), "."));
+        "Failed to generate required data:",
+        (context.encapsulated_key_.empty() ? " encapsulated key is empty" : ""),
+        (ciphertext.empty() ? " encrypted data is empty" : ""), "."));
   }
-
-  return ObliviousHttpRequest(
-      std::move(client_ctx), std::move(encapsulated_key), ohttp_key_config,
-      std::move(ciphertext), std::move(plaintext_payload));
+  return ciphertext;
 }
 
 // Request Serialize.
 // Builds request=[hdr, enc, ct].
-// https://www.ietf.org/archive/id/draft-ietf-ohai-ohttp-03.html#section-4.1-4.5
+// https://www.rfc-editor.org/rfc/rfc9458.html#section-4.3-4.5.1
 std::string ObliviousHttpRequest::EncapsulateAndSerialize() const {
   if (!oblivious_http_request_context_.has_value()) {
     QUICHE_BUG(ohttp_encapsulate_after_context_extract)
@@ -209,6 +224,72 @@ std::string ObliviousHttpRequest::EncapsulateAndSerialize() const {
 // the client while `CreateClientObliviousRequest`.
 absl::string_view ObliviousHttpRequest::GetPlaintextData() const {
   return request_plaintext_;
+}
+
+absl::StatusOr<ObliviousHttpRequest::Context>
+ObliviousHttpRequest::DecodeEncapsulatedRequestHeader(
+    QuicheDataReader& reader, const EVP_HPKE_KEY& gateway_key,
+    const ObliviousHttpHeaderKeyConfig& ohttp_key_config,
+    absl::string_view request_label) {
+  if (EVP_HPKE_KEY_kem(&gateway_key) == nullptr) {
+    return absl::InvalidArgumentError(
+        "Invalid input param. Failed to import gateway_key.");
+  }
+  bssl::UniquePtr<EVP_HPKE_CTX> gateway_ctx(EVP_HPKE_CTX_new());
+  if (gateway_ctx == nullptr) {
+    return SslErrorAsStatus("Failed to initialize Gateway/Server's Context.");
+  }
+
+  auto is_hdr_ok = ohttp_key_config.ParseOhttpPayloadHeader(reader);
+  if (!is_hdr_ok.ok()) {
+    return is_hdr_ok;
+  }
+
+  size_t enc_key_len = EVP_HPKE_KEM_enc_len(EVP_HPKE_KEY_kem(&gateway_key));
+
+  absl::string_view enc_key_received;
+  if (!reader.ReadStringPiece(&enc_key_received, enc_key_len)) {
+    return absl::FailedPreconditionError(absl::StrCat(
+        "Failed to extract encapsulation key of expected len=", enc_key_len,
+        "from payload."));
+  }
+  std::string info =
+      ohttp_key_config.SerializeRecipientContextInfo(request_label);
+  if (!EVP_HPKE_CTX_setup_recipient(
+          gateway_ctx.get(), &gateway_key, ohttp_key_config.GetHpkeKdf(),
+          ohttp_key_config.GetHpkeAead(),
+          reinterpret_cast<const uint8_t*>(enc_key_received.data()),
+          enc_key_received.size(),
+          reinterpret_cast<const uint8_t*>(info.data()), info.size())) {
+    return SslErrorAsStatus("Failed to setup recipient context");
+  }
+
+  return Context(std::move(gateway_ctx), std::string(enc_key_received));
+}
+
+absl::StatusOr<std::string> ObliviousHttpRequest::DecryptChunk(
+    Context& context, absl::string_view encrypted_chunk, bool is_final_chunk) {
+  uint8_t* ad = nullptr;
+  size_t ad_len = 0;
+  std::string final_ad_bytes;
+  if (is_final_chunk) {
+    ad = const_cast<uint8_t*>(kFinalAdBytes);
+    ad_len = sizeof(kFinalAdBytes);
+  }
+
+  std::string decrypted(encrypted_chunk.size(), '\0');
+  size_t decrypted_len;
+  if (!EVP_HPKE_CTX_open(
+          context.hpke_context_.get(),
+          reinterpret_cast<uint8_t*>(decrypted.data()), &decrypted_len,
+          decrypted.size(),
+          reinterpret_cast<const uint8_t*>(encrypted_chunk.data()),
+          encrypted_chunk.size(), ad, ad_len)) {
+    return SslErrorAsStatus("Failed to decrypt.",
+                            absl::StatusCode::kInvalidArgument);
+  }
+  decrypted.resize(decrypted_len);
+  return decrypted;
 }
 
 }  // namespace quiche

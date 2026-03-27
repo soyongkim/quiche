@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "absl/strings/string_view.h"
@@ -15,11 +16,14 @@
 #include "quiche/quic/core/crypto/quic_decrypter.h"
 #include "quiche/quic/core/crypto/quic_encrypter.h"
 #include "quiche/quic/core/crypto/quic_random.h"
+#include "quiche/quic/core/frames/quic_datagram_frame.h"
 #include "quiche/quic/core/frames/quic_immediate_ack_frame.h"
 #include "quiche/quic/core/frames/quic_reset_stream_at_frame.h"
 #include "quiche/quic/core/quic_connection_id.h"
+#include "quiche/quic/core/quic_error_codes.h"
 #include "quiche/quic/core/quic_packets.h"
 #include "quiche/quic/core/quic_types.h"
+#include "quiche/quic/core/quic_versions.h"
 
 namespace quic {
 
@@ -95,11 +99,11 @@ class QUICHE_EXPORT QuicFramerVisitorInterface {
   // Called only when |perspective_| is IS_CLIENT and a retry packet has been
   // parsed. |new_connection_id| contains the value of the Source Connection
   // ID field, and |retry_token| contains the value of the Retry Token field.
-  // On versions where UsesTls() is false,
+  // On versions where IsIetfQuic() is false,
   // |original_connection_id| contains the value of the Original Destination
   // Connection ID field, and both |retry_integrity_tag| and
   // |retry_without_tag| are empty.
-  // On versions where UsesTls() is true,
+  // On versions where IsIetfQuic() is true,
   // |original_connection_id| is empty, |retry_integrity_tag| contains the
   // value of the Retry Integrity Tag field, and |retry_without_tag| contains
   // the entire RETRY packet except the Retry Integrity Tag field.
@@ -214,8 +218,8 @@ class QUICHE_EXPORT QuicFramerVisitorInterface {
   // Called when a NewTokenFrame has been parsed.
   virtual bool OnNewTokenFrame(const QuicNewTokenFrame& frame) = 0;
 
-  // Called when a message frame has been parsed.
-  virtual bool OnMessageFrame(const QuicMessageFrame& frame) = 0;
+  // Called when a Datagrame frame has been parsed.
+  virtual bool OnDatagramFrame(const QuicDatagramFrame& frame) = 0;
 
   // Called when a handshake done frame has been parsed.
   virtual bool OnHandshakeDoneFrame(const QuicHandshakeDoneFrame& frame) = 0;
@@ -358,8 +362,8 @@ class QUICHE_EXPORT QuicFramer {
   // data length provided, but not counting the size of the data payload.
   static size_t GetMinCryptoFrameSize(QuicStreamOffset offset,
                                       QuicPacketLength data_length);
-  static size_t GetMessageFrameSize(bool last_frame_in_packet,
-                                    QuicByteCount length);
+  static size_t GetDatagramFrameSize(bool last_frame_in_packet,
+                                     QuicByteCount length);
   // Size in bytes of all ack frame fields without the missing packets or ack
   // blocks.
   static size_t GetMinAckFrameSize(QuicTransportVersion version,
@@ -449,13 +453,14 @@ class QUICHE_EXPORT QuicFramer {
   // ConnectionIdGeneartor interface, and callers need an accurate
   // Destination Connection ID for short header packets, call
   // ParsePublicHeaderDispatcherShortHeaderLengthUnknown() instead.
+  // |detailed_error| can be nullptr.
   static QuicErrorCode ParsePublicHeader(
       QuicDataReader* reader, uint8_t expected_destination_connection_id_length,
       bool ietf_format, uint8_t* first_byte, PacketHeaderFormat* format,
       bool* version_present, bool* has_length_prefix,
       QuicVersionLabel* version_label, ParsedQuicVersion* parsed_version,
-      QuicConnectionId* destination_connection_id,
-      QuicConnectionId* source_connection_id,
+      absl::string_view* destination_connection_id,
+      absl::string_view* source_connection_id,
       QuicLongHeaderType* long_packet_type,
       quiche::QuicheVariableLengthIntegerLength* retry_token_length_length,
       absl::string_view* retry_token, std::string* detailed_error);
@@ -466,14 +471,15 @@ class QUICHE_EXPORT QuicFramer {
   // for short headers. When callers need an accurate Destination Connection ID
   // specifically for short header packets, call
   // ParsePublicHeaderDispatcherShortHeaderLengthUnknown() instead.
+  // |detailed_error| can be nullptr.
   static QuicErrorCode ParsePublicHeaderDispatcher(
       const QuicEncryptedPacket& packet,
       uint8_t expected_destination_connection_id_length,
       PacketHeaderFormat* format, QuicLongHeaderType* long_packet_type,
       bool* version_present, bool* has_length_prefix,
       QuicVersionLabel* version_label, ParsedQuicVersion* parsed_version,
-      QuicConnectionId* destination_connection_id,
-      QuicConnectionId* source_connection_id,
+      absl::string_view* destination_connection_id,
+      absl::string_view* source_connection_id,
       std::optional<absl::string_view>* retry_token,
       std::string* detailed_error);
 
@@ -490,8 +496,8 @@ class QUICHE_EXPORT QuicFramer {
       QuicLongHeaderType* long_packet_type, bool* version_present,
       bool* has_length_prefix, QuicVersionLabel* version_label,
       ParsedQuicVersion* parsed_version,
-      QuicConnectionId* destination_connection_id,
-      QuicConnectionId* source_connection_id,
+      absl::string_view* destination_connection_id,
+      absl::string_view* source_connection_id,
       std::optional<absl::string_view>* retry_token,
       std::string* detailed_error, ConnectionIdGeneratorInterface& generator);
 
@@ -900,8 +906,8 @@ class QUICHE_EXPORT QuicFramer {
                                 QuicWindowUpdateFrame* frame);
   bool ProcessBlockedFrame(QuicDataReader* reader, QuicBlockedFrame* frame);
   void ProcessPaddingFrame(QuicDataReader* reader, QuicPaddingFrame* frame);
-  bool ProcessMessageFrame(QuicDataReader* reader, bool no_message_length,
-                           QuicMessageFrame* frame);
+  bool ProcessDatagramFrame(QuicDataReader* reader, bool no_datagram_length,
+                            QuicDatagramFrame* frame);
 
   bool DecryptPayload(size_t udp_packet_length, absl::string_view encrypted,
                       absl::string_view associated_data,
@@ -954,11 +960,13 @@ class QUICHE_EXPORT QuicFramer {
 
   static AckFrameInfo GetAckFrameInfo(const QuicAckFrame& frame);
 
+  // |detailed_error| can be nullptr.
   static QuicErrorCode ParsePublicHeaderGoogleQuic(
       QuicDataReader* reader, uint8_t* first_byte, PacketHeaderFormat* format,
       bool* version_present, QuicVersionLabel* version_label,
       ParsedQuicVersion* parsed_version,
-      QuicConnectionId* destination_connection_id, std::string* detailed_error);
+      absl::string_view* destination_connection_id,
+      std::string* detailed_error);
 
   bool ValidateReceivedConnectionIds(const QuicPacketHeader& header);
 
@@ -993,9 +1001,9 @@ class QUICHE_EXPORT QuicFramer {
                           QuicDataWriter* writer);
   bool AppendPaddingFrame(const QuicPaddingFrame& frame,
                           QuicDataWriter* writer);
-  bool AppendMessageFrameAndTypeByte(const QuicMessageFrame& frame,
-                                     bool last_frame_in_packet,
-                                     QuicDataWriter* writer);
+  bool AppendDatagramFrameAndTypeByte(const QuicDatagramFrame& frame,
+                                      bool last_frame_in_packet,
+                                      QuicDataWriter* writer);
 
   // IETF frame processing methods.
   bool ProcessIetfStreamFrame(QuicDataReader* reader, uint8_t frame_type,
@@ -1100,7 +1108,7 @@ class QUICHE_EXPORT QuicFramer {
   // Determine whether the given QuicAckFrame should be serialized with a
   // IETF_ACK_RECEIVE_TIMESTAMPS frame type.
   bool UseIetfAckWithReceiveTimestamp(const QuicAckFrame& frame) const {
-    return VersionHasIetfQuicFrames(version_.transport_version) &&
+    return VersionIsIetfQuic(version_.transport_version) &&
            process_timestamps_ &&
            std::min<uint64_t>(max_receive_timestamps_per_ack_,
                               frame.received_packet_times.size()) > 0;
@@ -1114,8 +1122,6 @@ class QUICHE_EXPORT QuicFramer {
   // Largest successfully decrypted packet number per packet number space. Only
   // used when supports_multiple_packet_number_spaces_ is true.
   QuicPacketNumber largest_decrypted_packet_numbers_[NUM_PACKET_NUMBER_SPACES];
-  // Last server connection ID seen on the wire.
-  QuicConnectionId last_serialized_server_connection_id_;
   // Version of the protocol being used.
   ParsedQuicVersion version_;
   // This vector contains QUIC versions which we currently support.

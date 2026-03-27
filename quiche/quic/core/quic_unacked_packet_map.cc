@@ -4,6 +4,7 @@
 
 #include "quiche/quic/core/quic_unacked_packet_map.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <limits>
 #include <type_traits>
@@ -18,6 +19,7 @@
 #include "quiche/quic/core/quic_utils.h"
 #include "quiche/quic/platform/api/quic_bug_tracker.h"
 #include "quiche/quic/platform/api/quic_flag_utils.h"
+#include "quiche/quic/platform/api/quic_flags.h"
 #include "quiche/common/simple_buffer_allocator.h"
 
 namespace quic {
@@ -52,7 +54,7 @@ enum QuicFrameTypeBitfield : uint32_t {
   kPathResponseFrameBitfield = 1 << 16,
   kPathChallengeFrameBitfield = 1 << 17,
   kStopSendingFrameBitfield = 1 << 18,
-  kMessageFrameBitfield = 1 << 19,
+  kDatagramFrameBitfield = 1 << 19,
   kNewTokenFrameBitfield = 1 << 20,
   kRetireConnectionIdFrameBitfield = 1 << 21,
   kAckFrequencyFrameBitfield = 1 << 22,
@@ -100,8 +102,8 @@ QuicFrameTypeBitfield GetFrameTypeBitfield(QuicFrameType type) {
       return kPathChallengeFrameBitfield;
     case STOP_SENDING_FRAME:
       return kStopSendingFrameBitfield;
-    case MESSAGE_FRAME:
-      return kMessageFrameBitfield;
+    case DATAGRAM_FRAME:
+      return kDatagramFrameBitfield;
     case NEW_TOKEN_FRAME:
       return kNewTokenFrameBitfield;
     case RETIRE_CONNECTION_ID_FRAME:
@@ -500,15 +502,14 @@ bool QuicUnackedPacketMap::NotifyFramesAcked(QuicPacketNumber packet_number,
     return false;
   }
   bool new_data_acked = false;
+  const bool is_retransmission = info->transmission_type != NOT_RETRANSMISSION;
   const QuicFrames* frames = &info->retransmittable_frames;
   quiche::SimpleBufferAllocator allocator;
   std::optional<QuicFrames> frames_copy;
-  const bool use_copied_frames = update_transmission_info_on_frame_acked_ &&
-                                 !HasMessageFrame(info->retransmittable_frames);
+  const bool use_copied_frames =
+      !HasDatagramFrame(info->retransmittable_frames);
 
   if (use_copied_frames) {
-    QUIC_RELOADABLE_FLAG_COUNT_N(quic_update_transmission_info_on_frame_acked,
-                                 2, 3);
     frames = &frames_copy.emplace(
         CopyQuicFrames(&allocator, info->retransmittable_frames));
   }
@@ -521,7 +522,8 @@ bool QuicUnackedPacketMap::NotifyFramesAcked(QuicPacketNumber packet_number,
   };
 
   for (const QuicFrame& frame : *frames) {
-    if (session_notifier_->OnFrameAcked(frame, ack_delay, receive_timestamp)) {
+    if (session_notifier_->OnFrameAcked(frame, ack_delay, receive_timestamp,
+                                        is_retransmission)) {
       new_data_acked = true;
     }
   }
@@ -549,12 +551,10 @@ void QuicUnackedPacketMap::MaybeAggregateAckedStreamFrame(
   const QuicFrames* frames = &info->retransmittable_frames;
   quiche::SimpleBufferAllocator allocator;
   std::optional<QuicFrames> frames_copy;
-  const bool use_copied_frames = update_transmission_info_on_frame_acked_ &&
-                                 !HasMessageFrame(info->retransmittable_frames);
+  const bool use_copied_frames =
+      !HasDatagramFrame(info->retransmittable_frames);
 
   if (use_copied_frames) {
-    QUIC_RELOADABLE_FLAG_COUNT_N(quic_update_transmission_info_on_frame_acked,
-                                 3, 3);
     frames = &frames_copy.emplace(
         CopyQuicFrames(&allocator, info->retransmittable_frames));
   }
@@ -594,7 +594,8 @@ void QuicUnackedPacketMap::MaybeAggregateAckedStreamFrame(
 
     NotifyAggregatedStreamFrameAcked(ack_delay);
     if (frame.type != STREAM_FRAME || frame.stream_frame.fin) {
-      session_notifier_->OnFrameAcked(frame, ack_delay, receive_timestamp);
+      session_notifier_->OnFrameAcked(frame, ack_delay, receive_timestamp,
+                                      /*is_retransmission=*/false);
       continue;
     }
 
@@ -616,9 +617,10 @@ void QuicUnackedPacketMap::NotifyAggregatedStreamFrameAcked(
   }
   // Note: there is no receive_timestamp for an aggregated stream frame.  The
   // frames that are aggregated may not have been received at the same time.
-  session_notifier_->OnFrameAcked(QuicFrame(aggregated_stream_frame_),
-                                  ack_delay,
-                                  /*receive_timestamp=*/QuicTime::Zero());
+  // We only aggregate stream frames that are not retransmissions.
+  session_notifier_->OnFrameAcked(
+      QuicFrame(aggregated_stream_frame_), ack_delay,
+      /*receive_timestamp=*/QuicTime::Zero(), /*is_retransmission=*/false);
   // Clear aggregated stream frame.
   aggregated_stream_frame_.stream_id = -1;
 }
@@ -730,6 +732,11 @@ int32_t QuicUnackedPacketMap::GetLastPacketContent() const {
     content |= GetFrameTypeBitfield(ACK_FRAME);
   }
   return content;
+}
+
+void QuicUnackedPacketMap::ReserveInitialCapacity(size_t initial_capacity) {
+  const size_t flag_capacity = GetQuicFlag(quic_preallocate_unacked_packets);
+  unacked_packets_.reserve(std::max(initial_capacity, flag_capacity));
 }
 
 }  // namespace quic

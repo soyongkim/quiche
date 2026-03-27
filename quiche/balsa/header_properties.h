@@ -48,13 +48,21 @@ inline constexpr char kInvalidHeaderCharList[] = {
     0x0C, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
     0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x7F};
 
-// The set of characters allowed in the Path and Query components of a URI, as
+// The set of characters allowed in the Path component of a URI, as
 // described in RFC 3986 Sections 3.3 and 3.4. Also includes the following
 // characters, which are not actually valid, but are seen in request paths on
 // the internet and unlikely to cause problems: []{}|^ and backslash.
 inline constexpr char kValidPathCharList[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~%!$&'()*"
     "+,;=:@/?[]{}|^\\";
+
+// The set of characters allowed in the Query component of a URI, as described
+// in RFC 3986 Sections 3.3 and 3.4. Also includes the following characters,
+// which are not actually valid, but are seen in query components on the
+// internet and unlikely to cause problems: []{}|^`" and backslash.
+inline constexpr char kValidQueryCharList[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~%!$&'()*"
+    "+,;=:@/?[]{}|^`\"\\";
 
 // Returns true if the given `c` is invalid in a header field name. The first
 // version is spec compliant, the second one incorrectly allows '"'.
@@ -65,9 +73,22 @@ QUICHE_EXPORT bool IsInvalidHeaderKeyCharAllowDoubleQuote(uint8_t c);
 QUICHE_EXPORT bool IsInvalidHeaderChar(uint8_t c);
 QUICHE_EXPORT bool HasInvalidHeaderChars(absl::string_view value);
 
-// Returns true if `value` contains a character not allowed in a path or query
+// Returns true if the given `char` is in the set of ASCII characters valid for
+// `token`s specified in
+// https://datatracker.ietf.org/doc/html/rfc9110#section-5.6.2. Many lexical
+// entries in the grammar are tokens: method, parameter-names, protocol names,
+// content-codings etc. Note that this differs from `IsInvalidHeaderKeyChar`
+// which considers `:` to be a valid character for header keys.
+QUICHE_EXPORT bool IsValidTokenChar(uint8_t c);
+QUICHE_EXPORT bool IsValidToken(absl::string_view value);
+
+// Returns true if `value` contains a character not allowed in the path
 // component of a URI.
 QUICHE_EXPORT bool HasInvalidPathChar(absl::string_view value);
+
+// Returns true if `value` contains a character not allowed in the query
+// component of a URI.
+QUICHE_EXPORT bool HasInvalidQueryChar(absl::string_view value);
 
 }  // namespace quiche::header_properties
 

@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "absl/strings/string_view.h"
@@ -52,6 +53,9 @@ class QUICHE_EXPORT TlsClientHandshaker
   std::string chlo_hash() const override;
   bool ExportKeyingMaterial(absl::string_view label, absl::string_view context,
                             size_t result_len, std::string* result) override;
+  bool MatchedTrustAnchorIdForTesting() const override;
+  std::optional<ssl_compliance_policy_t> SslCompliancePolicyForTesting()
+      const override;
 
   // From QuicCryptoClientStream::HandshakerInterface and TlsHandshaker
   bool encryption_established() const override;
@@ -168,6 +172,16 @@ class QUICHE_EXPORT TlsClientHandshaker
 
   std::unique_ptr<TransportParameters> received_transport_params_ = nullptr;
   std::unique_ptr<ApplicationState> received_application_state_ = nullptr;
+
+  // True if the server indicated during the handshake that it served a
+  // certificate which matched a Trust Anchor ID sent by the client. This value
+  // is needed only for testing.
+  bool matched_trust_anchor_id_ = false;
+
+  // If not nullopt, the SSL compliance policy to use. See documentation for
+  // ssl_compliance_policy_t values in BoringSSL:
+  // https://commondatastorage.googleapis.com/chromium-boringssl-docs/ssl.h.html#Compliance-policy-configurations
+  std::optional<ssl_compliance_policy_t> ssl_compliance_policy_ = std::nullopt;
 };
 
 }  // namespace quic

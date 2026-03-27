@@ -18,6 +18,8 @@
 #include "quiche/common/platform/api/quiche_bug_tracker.h"
 #include "quiche/common/quiche_crypto_logging.h"
 #include "quiche/common/quiche_random.h"
+#include "quiche/oblivious_http/buffers/oblivious_http_request.h"
+#include "quiche/oblivious_http/common/oblivious_http_definitions.h"
 #include "quiche/oblivious_http/common/oblivious_http_header_key_config.h"
 
 namespace quiche {
@@ -43,25 +45,12 @@ ObliviousHttpResponse::ObliviousHttpResponse(std::string encrypted_data,
 // 3. Derive aead_key using HKDF_Labeled_Expand
 // 4. Derive aead_nonce using HKDF_Labeled_Expand
 // 5. Setup AEAD context and Decrypt.
-// https://www.ietf.org/archive/id/draft-ietf-ohai-ohttp-03.html#section-4.2-4
+// https://www.rfc-editor.org/rfc/rfc9458.html#section-4.4-3
 absl::StatusOr<ObliviousHttpResponse>
 ObliviousHttpResponse::CreateClientObliviousResponse(
     std::string encrypted_data,
     ObliviousHttpRequest::Context& oblivious_http_request_context,
     absl::string_view resp_label) {
-  if (oblivious_http_request_context.hpke_context_ == nullptr) {
-    return absl::FailedPreconditionError(
-        "HPKE context wasn't initialized before proceeding with this Response "
-        "Decapsulation on Client-side.");
-  }
-  size_t expected_key_len = EVP_HPKE_KEM_enc_len(
-      EVP_HPKE_CTX_kem(oblivious_http_request_context.hpke_context_.get()));
-  if (oblivious_http_request_context.encapsulated_key_.size() !=
-      expected_key_len) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "Invalid len for encapsulated_key arg. Expected:", expected_key_len,
-        " Actual:", oblivious_http_request_context.encapsulated_key_.size()));
-  }
   if (encrypted_data.empty()) {
     return absl::InvalidArgumentError("Empty encrypted_data input param.");
   }
@@ -74,7 +63,7 @@ ObliviousHttpResponse::CreateClientObliviousResponse(
 
   // secret_len = [max(Nn, Nk)] where Nk and Nn are the length of AEAD
   // key and nonce associated with HPKE context.
-  // https://www.ietf.org/archive/id/draft-ietf-ohai-ohttp-03.html#section-4.2-2.1
+  // https://www.rfc-editor.org/rfc/rfc9458.html#section-4.4-2.1.1
   size_t secret_len = aead_params_st.value().secret_len;
   if (encrypted_data.size() < secret_len) {
     return absl::InvalidArgumentError(
@@ -83,49 +72,37 @@ ObliviousHttpResponse::CreateClientObliviousResponse(
                      secret_len, " bytes."));
   }
   // Extract response_nonce. Step 2
-  // https://www.ietf.org/archive/id/draft-ietf-ohai-ohttp-03.html#section-4.2-2.2
+  // https://www.rfc-editor.org/rfc/rfc9458.html#section-4.4-2.2.1
   absl::string_view response_nonce =
       absl::string_view(encrypted_data).substr(0, secret_len);
   absl::string_view encrypted_response =
       absl::string_view(encrypted_data).substr(secret_len);
 
-  // Steps (1, 3 to 5) + AEAD context SetUp before 6th step is performed in
-  // CommonOperations.
-  auto common_ops_st = CommonOperationsToEncapDecap(
-      response_nonce, oblivious_http_request_context, resp_label,
-      aead_params_st.value().aead_key_len,
-      aead_params_st.value().aead_nonce_len, aead_params_st.value().secret_len);
-  if (!common_ops_st.ok()) {
-    return common_ops_st.status();
+  absl::StatusOr<AeadContextData> aead_context_data =
+      GetAeadContextData(oblivious_http_request_context, *aead_params_st,
+                         resp_label, response_nonce);
+  if (!aead_context_data.ok()) {
+    return aead_context_data.status();
   }
-
-  std::string decrypted(encrypted_response.size(), '\0');
-  size_t decrypted_len;
 
   // Decrypt with initialized AEAD context.
   // response, error = Open(aead_key, aead_nonce, "", ct)
-  // https://www.ietf.org/archive/id/draft-ietf-ohai-ohttp-03.html#section-4.2-6
-  if (!EVP_AEAD_CTX_open(
-          common_ops_st.value().aead_ctx.get(),
-          reinterpret_cast<uint8_t*>(decrypted.data()), &decrypted_len,
-          decrypted.size(),
-          reinterpret_cast<const uint8_t*>(
-              common_ops_st.value().aead_nonce.data()),
-          aead_params_st.value().aead_nonce_len,
-          reinterpret_cast<const uint8_t*>(encrypted_response.data()),
-          encrypted_response.size(), nullptr, 0)) {
-    return SslErrorAsStatus(
-        "Failed to decrypt the response with derived AEAD key and nonce.");
+  // https://www.rfc-editor.org/rfc/rfc9458.html#section-4.4-6
+  // DecryptChunk with `is_final_chunk` as false is the same implementation as
+  // decrypting the full encrypted response.
+  absl::StatusOr<std::string> decrypted =
+      DecryptChunk(encrypted_response, *aead_context_data,
+                   aead_context_data->aead_nonce, /*is_final_chunk=*/false);
+  if (!decrypted.ok()) {
+    return decrypted.status();
   }
-  decrypted.resize(decrypted_len);
   ObliviousHttpResponse oblivious_response(std::move(encrypted_data),
-                                           std::move(decrypted));
+                                           std::move(*decrypted));
   return oblivious_response;
 }
 
 // Response Encapsulation.
-// Follows the Ohttp spec section-4.2 (Encapsulation of Responses) Ref
-// https://www.ietf.org/archive/id/draft-ietf-ohai-ohttp-03.html#section-4.2
+// https://www.rfc-editor.org/rfc/rfc9458.html#section-4.4
 // Use HPKE context from BoringSSL to export a secret and use it to Seal (AKA
 // encrypt) the response back to the Sender(client)
 absl::StatusOr<ObliviousHttpResponse>
@@ -133,19 +110,6 @@ ObliviousHttpResponse::CreateServerObliviousResponse(
     std::string plaintext_payload,
     ObliviousHttpRequest::Context& oblivious_http_request_context,
     absl::string_view response_label, QuicheRandom* quiche_random) {
-  if (oblivious_http_request_context.hpke_context_ == nullptr) {
-    return absl::FailedPreconditionError(
-        "HPKE context wasn't initialized before proceeding with this Response "
-        "Encapsulation on Server-side.");
-  }
-  size_t expected_key_len = EVP_HPKE_KEM_enc_len(
-      EVP_HPKE_CTX_kem(oblivious_http_request_context.hpke_context_.get()));
-  if (oblivious_http_request_context.encapsulated_key_.size() !=
-      expected_key_len) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "Invalid len for encapsulated_key arg. Expected:", expected_key_len,
-        " Actual:", oblivious_http_request_context.encapsulated_key_.size()));
-  }
   if (plaintext_payload.empty()) {
     return absl::InvalidArgumentError("Empty plaintext_payload input param.");
   }
@@ -161,7 +125,7 @@ ObliviousHttpResponse::CreateServerObliviousResponse(
           oblivious_http_request_context.hpke_context_.get())));
   std::string encrypted_data(max_encrypted_data_size, '\0');
   // response_nonce = random(max(Nn, Nk))
-  // https://www.ietf.org/archive/id/draft-ietf-ohai-ohttp-03.html#section-4.2-2.2
+  // https://www.rfc-editor.org/rfc/rfc9458.html#section-4.4-2.2.1
   random(quiche_random, encrypted_data.data(), nonce_size);
   absl::string_view response_nonce =
       absl::string_view(encrypted_data).substr(0, nonce_size);
@@ -177,7 +141,7 @@ ObliviousHttpResponse::CreateServerObliviousResponse(
   }
 
   // ct = Seal(aead_key, aead_nonce, "", response)
-  // https://www.ietf.org/archive/id/draft-ietf-ohai-ohttp-03.html#section-4.2-2.6
+  // https://www.rfc-editor.org/rfc/rfc9458.html#section-4.4-2.2.1
   size_t ciphertext_len;
   if (!EVP_AEAD_CTX_seal(
           common_ops_st.value().aead_ctx.get(),
@@ -205,7 +169,7 @@ ObliviousHttpResponse::CreateServerObliviousResponse(
 
 // Serialize.
 // enc_response = concat(response_nonce, ct)
-// https://www.ietf.org/archive/id/draft-ietf-ohai-ohttp-03.html#section-4.2-4
+// https://www.rfc-editor.org/rfc/rfc9458.html#section-4.4-3
 const std::string& ObliviousHttpResponse::EncapsulateAndSerialize() const {
   return encrypted_data_;
 }
@@ -221,6 +185,19 @@ const std::string& ObliviousHttpResponse::GetPlaintextData() const {
 absl::StatusOr<ObliviousHttpResponse::CommonAeadParamsResult>
 ObliviousHttpResponse::GetCommonAeadParams(
     ObliviousHttpRequest::Context& oblivious_http_request_context) {
+  if (oblivious_http_request_context.hpke_context_ == nullptr) {
+    return absl::FailedPreconditionError(
+        "HPKE context wasn't initialized before proceeding with this Response");
+  }
+  size_t expected_key_len = EVP_HPKE_KEM_enc_len(
+      EVP_HPKE_CTX_kem(oblivious_http_request_context.hpke_context_.get()));
+  if (oblivious_http_request_context.encapsulated_key_.size() !=
+      expected_key_len) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Invalid len for encapsulated_key arg. Expected:", expected_key_len,
+        " Actual:", oblivious_http_request_context.encapsulated_key_.size()));
+  }
+
   const EVP_AEAD* evp_hpke_aead = EVP_HPKE_AEAD_aead(
       EVP_HPKE_CTX_aead(oblivious_http_request_context.hpke_context_.get()));
   if (evp_hpke_aead == nullptr) {
@@ -241,8 +218,8 @@ ObliviousHttpResponse::GetCommonAeadParams(
 // Common Steps of AEAD key and AEAD nonce derivation common to both
 // client(decapsulation) & Gateway(encapsulation) in handling
 // Oblivious-Response. Ref Steps (1, 3-to-5, and setting up AEAD context in
-// preparation for 6th step's Seal/Open) in spec.
-// https://www.ietf.org/archive/id/draft-ietf-ohai-ohttp-03.html#section-4.2-4
+// preparation for 6th step's Seal/Open) in the RFC.
+// https://www.rfc-editor.org/rfc/rfc9458.html#section-4.4-3
 absl::StatusOr<ObliviousHttpResponse::CommonOperationsResult>
 ObliviousHttpResponse::CommonOperationsToEncapDecap(
     absl::string_view response_nonce,
@@ -255,7 +232,7 @@ ObliviousHttpResponse::CommonOperationsToEncapDecap(
   // secret = context.Export("message/bhttp response", Nk)
   // Export secret of len [max(Nn, Nk)] where Nk and Nn are the length of AEAD
   // key and nonce associated with context.
-  // https://www.ietf.org/archive/id/draft-ietf-ohai-ohttp-03.html#section-4.2-2.1
+  // https://www.rfc-editor.org/rfc/rfc9458.html#section-4.4-2.1.1
   std::string secret(secret_len, '\0');
   if (!EVP_HPKE_CTX_export(oblivious_http_request_context.hpke_context_.get(),
                            reinterpret_cast<uint8_t*>(secret.data()),
@@ -266,12 +243,12 @@ ObliviousHttpResponse::CommonOperationsToEncapDecap(
   }
 
   // salt = concat(enc, response_nonce)
-  // https://www.ietf.org/archive/id/draft-ietf-ohai-ohttp-03.html#section-4.2-2.3
+  // https://www.rfc-editor.org/rfc/rfc9458.html#section-4.4-2.3.1
   std::string salt = absl::StrCat(
       oblivious_http_request_context.encapsulated_key_, response_nonce);
 
   // prk = Extract(salt, secret)
-  // https://www.ietf.org/archive/id/draft-ietf-ohai-ohttp-03.html#section-4.2-2.3
+  // https://www.rfc-editor.org/rfc/rfc9458.html#section-4.4-2.3.1
   std::string pseudorandom_key(EVP_MAX_MD_SIZE, '\0');
   size_t prk_len;
   auto evp_md = EVP_HPKE_KDF_hkdf_md(
@@ -295,7 +272,7 @@ ObliviousHttpResponse::CommonOperationsToEncapDecap(
   pseudorandom_key.resize(prk_len);
 
   // aead_key = Expand(prk, "key", Nk)
-  // https://www.ietf.org/archive/id/draft-ietf-ohai-ohttp-03.html#section-4.2-2.4
+  // https://www.rfc-editor.org/rfc/rfc9458.html#section-4.4-2.4.1
   std::string aead_key(aead_key_len, '\0');
   absl::string_view hkdf_info = ObliviousHttpHeaderKeyConfig::kKeyHkdfInfo;
   // All currently supported KDFs are HKDF-based. See CheckKdfId in
@@ -310,7 +287,7 @@ ObliviousHttpResponse::CommonOperationsToEncapDecap(
   }
 
   // aead_nonce = Expand(prk, "nonce", Nn)
-  // https://www.ietf.org/archive/id/draft-ietf-ohai-ohttp-03.html#section-4.2-2.5
+  // https://www.rfc-editor.org/rfc/rfc9458.html#section-4.4-2.5.1
   std::string aead_nonce(aead_nonce_len, '\0');
   hkdf_info = ObliviousHttpHeaderKeyConfig::kNonceHkdfInfo;
   // All currently supported KDFs are HKDF-based. See CheckKdfId in
@@ -349,4 +326,133 @@ ObliviousHttpResponse::CommonOperationsToEncapDecap(
   return result;
 }
 
+absl::StatusOr<ObliviousHttpResponse::AeadContextData>
+ObliviousHttpResponse::GetAeadContextData(
+    ObliviousHttpRequest::Context& oblivious_http_request_context,
+    CommonAeadParamsResult& aead_params, absl::string_view response_label,
+    absl::string_view response_nonce) {
+  // Steps (1, 3 to 5) + AEAD context SetUp before 6th step is performed in
+  // CommonOperations.
+  // https://www.rfc-editor.org/rfc/rfc9458.html#section-4.4-3
+  auto common_ops_st = CommonOperationsToEncapDecap(
+      response_nonce, oblivious_http_request_context, response_label,
+      aead_params.aead_key_len, aead_params.aead_nonce_len,
+      aead_params.secret_len);
+  if (!common_ops_st.ok()) {
+    return common_ops_st.status();
+  }
+  return AeadContextData{std::move(common_ops_st.value().aead_ctx),
+                         std::move(common_ops_st.value().aead_nonce)};
+}
+
+// Encrypts the chunk following
+// https://www.ietf.org/archive/id/draft-ietf-ohai-chunked-ohttp-05.html#section-6.1
+// The plaintext payload can only be empty if this is the final chunk. The chunk
+// nonce cannot be empty. If the operation succeeds then the returned encrypted
+// data is guaranteed to be non-empty.
+absl::StatusOr<std::string> ObliviousHttpResponse::EncryptChunk(
+    ObliviousHttpRequest::Context& oblivious_http_request_context,
+    const AeadContextData& aead_context_data,
+    absl::string_view plaintext_payload, absl::string_view chunk_nonce,
+    bool is_final_chunk) {
+  // Empty plaintext_payload is only allowed for the final chunk.
+  if (!is_final_chunk && plaintext_payload.empty()) {
+    return absl::InvalidArgumentError(
+        "Payload cannot be empty for non-final chunks.");
+  }
+  if (chunk_nonce.empty()) {
+    return absl::InvalidArgumentError("Chunk nonce cannot be empty.");
+  }
+
+  uint8_t* ad = nullptr;
+  size_t ad_len = 0;
+  if (is_final_chunk) {
+    ad = const_cast<uint8_t*>(kFinalAdBytes);
+    ad_len = sizeof(kFinalAdBytes);
+  }
+
+  const size_t max_encrypted_data_size =
+      plaintext_payload.size() +
+      EVP_AEAD_max_overhead(EVP_HPKE_AEAD_aead(EVP_HPKE_CTX_aead(
+          oblivious_http_request_context.hpke_context_.get())));
+  std::string encrypted_data(max_encrypted_data_size, '\0');
+  size_t ciphertext_len;
+
+  if (!EVP_AEAD_CTX_seal(
+          aead_context_data.aead_ctx.get(),
+          reinterpret_cast<uint8_t*>(encrypted_data.data()), &ciphertext_len,
+          encrypted_data.size(),
+          reinterpret_cast<const uint8_t*>(chunk_nonce.data()),
+          aead_context_data.aead_nonce.size(),
+          reinterpret_cast<const uint8_t*>(plaintext_payload.data()),
+          plaintext_payload.size(), ad, ad_len)) {
+    return SslErrorAsStatus(
+        "Failed to encrypt the payload with derived AEAD key.");
+  }
+  encrypted_data.resize(ciphertext_len);
+  if (ciphertext_len == 0) {
+    return absl::InternalError("Generated Encrypted payload cannot be empty.");
+  }
+  return encrypted_data;
+}
+
+absl::StatusOr<std::string> ObliviousHttpResponse::DecryptChunk(
+    absl::string_view encrypted_chunk, const AeadContextData& aead_context_data,
+    absl::string_view chunk_nonce, bool is_final_chunk) {
+  uint8_t* ad = nullptr;
+  size_t ad_len = 0;
+  if (is_final_chunk) {
+    ad = const_cast<uint8_t*>(kFinalAdBytes);
+    ad_len = sizeof(kFinalAdBytes);
+  }
+
+  std::string decrypted(encrypted_chunk.size(), '\0');
+  size_t decrypted_len;
+  if (!EVP_AEAD_CTX_open(
+          aead_context_data.aead_ctx.get(),
+          reinterpret_cast<uint8_t*>(decrypted.data()), &decrypted_len,
+          decrypted.size(),
+          reinterpret_cast<const uint8_t*>(chunk_nonce.data()),
+          aead_context_data.aead_nonce.size(),
+          reinterpret_cast<const uint8_t*>(encrypted_chunk.data()),
+          encrypted_chunk.size(), ad, ad_len)) {
+    return SslErrorAsStatus(
+        "Failed to decrypt the response with derived AEAD key and nonce.");
+  }
+  decrypted.resize(decrypted_len);
+  return decrypted;
+}
+
+absl::StatusOr<ObliviousHttpResponse::ChunkCounter>
+ObliviousHttpResponse::ChunkCounter::Create(std::string nonce) {
+  if (nonce.empty()) {
+    return absl::InvalidArgumentError("Nonce must not be empty.");
+  }
+  return ObliviousHttpResponse::ChunkCounter(std::move(nonce));
+}
+
+ObliviousHttpResponse::ChunkCounter::ChunkCounter(std::string nonce)
+    : nonce_(std::move(nonce)), encoded_counter_(nonce_.size(), '\0') {}
+
+void ObliviousHttpResponse::ChunkCounter::Increment() {
+  uint64_t pos = nonce_.size();
+  // Start with the least significant byte and increment it by 1, if it wraps
+  // then proceed to the next byte and repeat.
+  do {
+    pos--;
+    encoded_counter_[pos] += static_cast<uint8_t>(1);
+  } while (pos != 0 && encoded_counter_[pos] == '\0');
+  if (pos == 0 && encoded_counter_[pos] == '\0') {
+    // Counter has wrapped.
+    limit_exceeded_ = true;
+  }
+}
+
+std::string ObliviousHttpResponse::ChunkCounter::GetChunkNonce() const {
+  std::string chunk_nonce(nonce_.size(), '\0');
+  for (size_t i = 0; i < chunk_nonce.size(); i++) {
+    chunk_nonce[i] = nonce_[i] ^ encoded_counter_[i];
+  }
+  return chunk_nonce;
+}
 }  // namespace quiche

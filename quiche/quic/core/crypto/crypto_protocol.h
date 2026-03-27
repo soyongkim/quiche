@@ -145,12 +145,15 @@ DEFINE_STATIC_QUIC_TAG(BBQ0);  // Increase bytes_acked in
 DEFINE_STATIC_QUIC_TAG(BBHI);  // Increase inflight_hi in
                                // PROBE_UP if ever inflight_hi
                                // limited in round
+DEFINE_STATIC_QUIC_TAG(B1AL);  // In BBRv1, always exit startup
+                               // on loss even if app-limited.
 DEFINE_STATIC_QUIC_TAG(RENO);  // Reno Congestion Control
 DEFINE_STATIC_QUIC_TAG(BYTE);  // TCP cubic or reno in bytes
 DEFINE_STATIC_QUIC_TAG(IW03);  // Force ICWND to 3
 DEFINE_STATIC_QUIC_TAG(IW10);  // Force ICWND to 10
 DEFINE_STATIC_QUIC_TAG(IW20);  // Force ICWND to 20
 DEFINE_STATIC_QUIC_TAG(IW50);  // Force ICWND to 50
+DEFINE_STATIC_QUIC_TAG(IW2X);  // Force ICWND to 2x its default value.
 DEFINE_STATIC_QUIC_TAG(B2ON);  // Enable BBRv2
 DEFINE_STATIC_QUIC_TAG(B2NA);  // For BBRv2, do not add ack
                                // height to queueing threshold
@@ -216,6 +219,8 @@ DEFINE_STATIC_QUIC_TAG(AFF1);  // Use SRTT in building
                                // AckFrequencyFrame.
 DEFINE_STATIC_QUIC_TAG(AFF2);  // Send AckFrequencyFrame upon
                                // handshake completion.
+DEFINE_STATIC_QUIC_TAG(AFIA);  // Send MinAckDelay transport parameter to allow
+                               // receipt of ACK_FREQUENCY and IMMEDIATE_ACK
 DEFINE_STATIC_QUIC_TAG(SSLR);  // Slow Start Large Reduction.
 DEFINE_STATIC_QUIC_TAG(NPRR);  // Pace at unity instead of PRR
 DEFINE_STATIC_QUIC_TAG(5RTO);  // Close connection on 5 RTOs
@@ -414,6 +419,8 @@ DEFINE_STATIC_QUIC_TAG(TRTT);  // If server receives an rtt
                                // it as the initial rtt.
 DEFINE_STATIC_QUIC_TAG(SNI);   // Server name
                                // indication
+DEFINE_STATIC_QUIC_TAG(DSNI);  // Enables the debugging_sni transport parameter
+                               // to be sent alongside ECH GREASE, but not ECH.
 DEFINE_STATIC_QUIC_TAG(PUBS);  // Public key values
 DEFINE_STATIC_QUIC_TAG(SCID);  // Server config id
 DEFINE_STATIC_QUIC_TAG(OBIT);  // Server orbit.
@@ -444,6 +451,13 @@ DEFINE_STATIC_QUIC_TAG(ROWF);  // Send first 1-RTT packet on
                                // ROWP timeout.
 DEFINE_STATIC_QUIC_TAG(ROWR);  // Send random bytes on ROWP
                                // timeout.
+
+// Retransmittable on wire timeout experiment.
+// TODO: b/427246911 - Remove these tags once the experiment is complete.
+DEFINE_STATIC_QUIC_TAG(ROW1);  // Set retransmittable on wire timeout to 1*PTO.
+DEFINE_STATIC_QUIC_TAG(ROW2);  // Set retransmittable on wire timeout to 2*PTO.
+DEFINE_STATIC_QUIC_TAG(ROW3);  // Set retransmittable on wire timeout to 3*PTO.
+
 // Selective Resumption variants.
 DEFINE_STATIC_QUIC_TAG(GSR0);
 DEFINE_STATIC_QUIC_TAG(GSR1);
@@ -468,6 +482,9 @@ DEFINE_STATIC_QUIC_TAG(ACH0);
 // matching when trying to send a request on active sessions.
 DEFINE_STATIC_QUIC_TAG(NOIP);
 DEFINE_STATIC_QUIC_TAG(NIPA);  // Aggressively skip IP matching
+
+// Experiment for sending new ORIGIN frame.
+DEFINE_STATIC_QUIC_TAG(ORIG);
 
 // Rejection tags
 DEFINE_STATIC_QUIC_TAG(RREJ);  // Reasons for server sending
@@ -519,6 +536,19 @@ DEFINE_STATIC_QUIC_TAG(FPPE);
 
 // Fix timeouts experiment.
 DEFINE_STATIC_QUIC_TAG(FTOE);
+
+// Path degradation experiments.
+DEFINE_STATIC_QUIC_TAG(PDE2);  // 2 PTOs for path degradation.
+DEFINE_STATIC_QUIC_TAG(PDE3);  // 3 PTOs for path degradation.
+DEFINE_STATIC_QUIC_TAG(PDE5);  // 5 PTOs for path degradation.
+DEFINE_STATIC_QUIC_TAG(MPR1);  // Probe for multi-port path on RTO.
+// TODO: b/433537286 - Remove this tag once the experiment is complete.
+DEFINE_STATIC_QUIC_TAG(CFLS);  // Enable flow-label-based blackhole avoidance on
+                               // the server side when the client sends CFLS.
+
+// Experiment for explicit connection close packet for silent idle timeout
+// from server.
+DEFINE_STATIC_QUIC_TAG(ECCP);
 
 #undef DEFINE_STATIC_QUIC_TAG
 

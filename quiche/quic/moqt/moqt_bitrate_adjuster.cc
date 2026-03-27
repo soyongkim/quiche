@@ -4,11 +4,13 @@
 
 #include "quiche/quic/moqt/moqt_bitrate_adjuster.h"
 
-#include <algorithm>
-#include <cstdint>
+#include <cstdlib>
+#include <optional>
 
 #include "quiche/quic/core/quic_bandwidth.h"
 #include "quiche/quic/core/quic_time.h"
+#include "quiche/quic/moqt/moqt_messages.h"
+#include "quiche/common/platform/api/quiche_bug_tracker.h"
 #include "quiche/common/platform/api/quiche_logging.h"
 #include "quiche/web_transport/web_transport.h"
 
@@ -20,71 +22,127 @@ using ::quic::QuicBandwidth;
 using ::quic::QuicTime;
 using ::quic::QuicTimeDelta;
 
-// Whenever adjusting bitrate down, it is set to `kTargetBitrateMultiplier *
-// bw`, where `bw` is typically windowed max bandwidth reported by BBR.  The
-// current value selected is a bit arbitrary; ideally, we would adjust down to
-// the application data goodput (i.e. goodput excluding all of the framing
-// overhead), but that would either require us knowing how to compute the
-// framing overhead correctly, or implementing our own application-level goodput
-// monitoring.
-constexpr float kTargetBitrateMultiplier = 0.9f;
-
-// Avoid re-adjusting bitrate within N RTTs after adjusting it. Here, on a
-// typical 20ms connection, 40 RTTs is 800ms.  Cap the limit at 3000ms.
-constexpr float kMinTimeBetweenAdjustmentsInRtts = 40;
-constexpr QuicTimeDelta kMaxTimeBetweenAdjustments =
-    QuicTimeDelta::FromSeconds(3);
-
 }  // namespace
 
+void MoqtBitrateAdjuster::Start() {
+  if (start_time_.IsInitialized()) {
+    QUICHE_BUG(MoqtBitrateAdjuster_double_init)
+        << "MoqtBitrateAdjuster::Start() called more than once.";
+    return;
+  }
+  start_time_ = clock_->Now();
+  outstanding_objects_.emplace(
+      /*max_out_of_order_objects=*/parameters_.max_out_of_order_objects);
+}
+
 void MoqtBitrateAdjuster::OnObjectAckReceived(
-    uint64_t /*group_id*/, uint64_t /*object_id*/,
-    QuicTimeDelta delta_from_deadline) {
-  if (delta_from_deadline < QuicTimeDelta::Zero()) {
-    // While adjusting down upon the first sign of packets getting late might
-    // seem aggressive, note that:
-    //   - By the time user occurs, this is already a user-visible issue (so, in
-    //     some sense, this isn't aggressive enough).
-    //   - The adjustment won't happen if we're already bellow `k * max_bw`, so
-    //     if the delays are due to other factors like bufferbloat, the measured
-    //     bandwidth will likely not result in a downwards adjustment.
+    Location location, QuicTimeDelta delta_from_deadline) {
+  if (!start_time_.IsInitialized() || !outstanding_objects_.has_value()) {
+    return;
+  }
+
+  // Update the state.
+  int reordering_delta = outstanding_objects_->OnObjectAcked(location);
+
+  // Decide whether to act based on the latest signal.
+  if (!ShouldUseAckAsActionSignal(location)) {
+    return;
+  }
+  if (ShouldAttemptAdjustingDown(reordering_delta, delta_from_deadline)) {
     AttemptAdjustingDown();
   }
 }
 
-void MoqtBitrateAdjuster::AttemptAdjustingDown() {
-  webtransport::SessionStats stats = session_->GetSessionStats();
+bool MoqtBitrateAdjuster::ShouldUseAckAsActionSignal(Location location) {
+  // Allow for some time to pass for the connection to reach the point at which
+  // the rate adaptation signals can become useful.
+  const QuicTime earliest_action_time = start_time_ + parameters_.initial_delay;
+  const bool too_early_in_the_connection = clock_->Now() < earliest_action_time;
 
-  // Wait for a while after doing an adjustment.  There are non-trivial costs to
-  // switching, so we should rate limit adjustments.
-  QuicTimeDelta adjustment_delay =
-      QuicTimeDelta(stats.smoothed_rtt * kMinTimeBetweenAdjustmentsInRtts);
-  adjustment_delay = std::min(adjustment_delay, kMaxTimeBetweenAdjustments);
-  QuicTime now = clock_->ApproximateNow();
-  if (now - last_adjustment_time_ < adjustment_delay) {
-    return;
-  }
+  // Ignore out-of-order acks for the purpose of deciding whether to adjust up
+  // or down.  Generally, if an ack is out of order, the bitrate adjuster has
+  // already reacted to the later object appropriately.
+  const bool is_out_of_order_ack = location < last_acked_object_;
+  last_acked_object_ = location;
 
-  // Only adjust downwards.
-  QuicBandwidth target_bandwidth =
-      kTargetBitrateMultiplier *
-      QuicBandwidth::FromBitsPerSecond(stats.estimated_send_rate_bps);
-  QuicBandwidth current_bandwidth = adjustable_->GetCurrentBitrate();
-  if (current_bandwidth <= target_bandwidth) {
-    return;
-  }
-
-  QUICHE_DLOG(INFO) << "Adjusting the bitrate from " << current_bandwidth
-                    << " to " << target_bandwidth;
-  bool success = adjustable_->AdjustBitrate(target_bandwidth);
-  if (success) {
-    last_adjustment_time_ = now;
-  }
+  return !too_early_in_the_connection && !is_out_of_order_ack;
 }
 
-void MoqtBitrateAdjuster::OnObjectAckSupportKnown(bool supported) {
-  QUICHE_DLOG_IF(WARNING, !supported)
-      << "OBJECT_ACK not supported; bitrate adjustments will not work.";
+bool MoqtBitrateAdjuster::ShouldAttemptAdjustingDown(
+    int reordering_delta, quic::QuicTimeDelta delta_from_deadline) const {
+  const bool has_exceeded_max_out_of_order =
+      reordering_delta > parameters_.max_out_of_order_objects;
+  QUICHE_DLOG_IF(INFO, has_exceeded_max_out_of_order)
+      << "Adjusting connection down due to reordering, delta: "
+      << reordering_delta;
+
+  const bool time_delta_too_close =
+      delta_from_deadline < parameters_.adjust_down_threshold * time_window_;
+  QUICHE_DLOG_IF(INFO, time_delta_too_close)
+      << "Adjusting connection down due to object arriving too late, time "
+         "delta: "
+      << delta_from_deadline;
+
+  return has_exceeded_max_out_of_order || time_delta_too_close;
+}
+
+void MoqtBitrateAdjuster::AttemptAdjustingDown() {
+  webtransport::SessionStats stats = session_->GetSessionStats();
+  QuicBandwidth target_bandwidth =
+      parameters_.target_bitrate_multiplier_down *
+      QuicBandwidth::FromBitsPerSecond(stats.estimated_send_rate_bps);
+  QUICHE_DLOG(INFO) << "Adjusting the bitrate down to " << target_bandwidth;
+  SuggestNewBitrate(target_bandwidth, BitrateAdjustmentType::kDown);
+}
+
+void MoqtBitrateAdjuster::OnObjectAckSupportKnown(
+    std::optional<quic::QuicTimeDelta> time_window) {
+  if (!time_window.has_value() || *time_window <= QuicTimeDelta::Zero()) {
+    QUICHE_DLOG(WARNING)
+        << "OBJECT_ACK not supported; bitrate adjustments will not work.";
+    return;
+  }
+  time_window_ = *time_window;
+  Start();
+}
+
+bool ShouldIgnoreBitrateAdjustment(quic::QuicBandwidth new_bitrate,
+                                   BitrateAdjustmentType type,
+                                   quic::QuicBandwidth old_bitrate,
+                                   float min_change) {
+  const float min_change_bps = old_bitrate.ToBitsPerSecond() * min_change;
+  const float change_bps =
+      new_bitrate.ToBitsPerSecond() - old_bitrate.ToBitsPerSecond();
+  if (std::abs(change_bps) < min_change_bps) {
+    return true;
+  }
+
+  switch (type) {
+    case moqt::BitrateAdjustmentType::kDown:
+      if (new_bitrate >= old_bitrate) {
+        return true;
+      }
+      break;
+    case moqt::BitrateAdjustmentType::kUp:
+      if (old_bitrate >= new_bitrate) {
+        return true;
+      }
+      break;
+  }
+  return false;
+}
+
+void MoqtBitrateAdjuster::SuggestNewBitrate(quic::QuicBandwidth bitrate,
+                                            BitrateAdjustmentType type) {
+  adjustable_->ConsiderAdjustingBitrate(bitrate, type);
+  trace_recorder_.RecordTargetBitrateSet(bitrate);
+}
+
+void MoqtBitrateAdjuster::OnNewObjectEnqueued(Location location) {
+  if (!start_time_.IsInitialized() || !outstanding_objects_.has_value()) {
+    return;
+  }
+  outstanding_objects_->OnObjectAdded(location);
 }
 
 }  // namespace moqt

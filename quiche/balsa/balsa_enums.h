@@ -66,6 +66,9 @@ struct QUICHE_EXPORT BalsaFrameEnums {
     FAILED_TO_FIND_NL_AFTER_REQUEST_HTTP_VERSION,    // |  firstline_c
     INVALID_WS_IN_STATUS_LINE,
     INVALID_WS_IN_REQUEST_LINE,
+    MULTIPLE_SPACES_IN_STATUS_LINE,
+    MULTIPLE_SPACES_IN_REQUEST_LINE,
+    OBS_FOLD_IN_HEADERS,
 
     FAILED_CONVERTING_STATUS_CODE_TO_INT,
     INVALID_TARGET_URI,
@@ -85,6 +88,7 @@ struct QUICHE_EXPORT BalsaFrameEnums {
     INVALID_CHUNK_LENGTH,
     CHUNK_LENGTH_OVERFLOW,
     INVALID_CHUNK_EXTENSION,
+    INVALID_CHUNK_FRAMING,
 
     // Other errors.
     CALLED_BYTES_SPLICED_WHEN_UNSAFE_TO_DO_SO,
@@ -102,6 +106,7 @@ struct QUICHE_EXPORT BalsaFrameEnums {
     INVALID_TRAILER_FORMAT,
     TRAILER_TOO_LONG,
     TRAILER_MISSING_COLON,
+    OBS_FOLD_IN_TRAILERS,
 
     // A detected internal inconsistency was found.
     INTERNAL_LOGIC_ERROR,
@@ -114,6 +119,9 @@ struct QUICHE_EXPORT BalsaFrameEnums {
     // The client request included 'Expect: 100-continue' header on a protocol
     // that doesn't support it.
     UNSUPPORTED_100_CONTINUE,
+
+    // Request method violates RFC 9110, Section 5.6.2
+    INVALID_REQUEST_METHOD,
 
     NUM_ERROR_CODES
   };

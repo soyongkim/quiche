@@ -6,10 +6,10 @@
 #include <list>
 #include <memory>
 #include <optional>
+#include <variant>
 #include <vector>
 
 #include "absl/strings/string_view.h"
-#include "absl/types/variant.h"
 #include "quiche/http2/adapter/chunked_buffer.h"
 #include "quiche/http2/adapter/data_source.h"
 #include "quiche/http2/adapter/event_forwarder.h"
@@ -92,10 +92,10 @@ class QUICHE_EXPORT OgHttp2Session : public Http2Session,
     // If true, allows a GOAWAY to be sent even when acting as a client.
     bool send_goaway_as_client = false;
     // Specifies the behavior of the HPACK encoder when compressing headers.
-    enum CompressionOption {
+    enum CompressionOption : uint8_t {
       ENABLE_COMPRESSION,   // Dynamic table enabled, Huffman enabled.
-      DISABLE_COMPRESSION,  // Dynamic table enabled, Huffman disabled.
-      DISABLE_HUFFMAN,      // Dynamic table disabled, Huffman disabled.
+      DISABLE_COMPRESSION,  // Dynamic table disabled, Huffman disabled.
+      DISABLE_HUFFMAN,      // Dynamic table enabled, Huffman disabled.
     };
     CompressionOption compression_option = ENABLE_COMPRESSION;
   };
@@ -344,7 +344,7 @@ class QUICHE_EXPORT OgHttp2Session : public Http2Session,
 
   void SendWindowUpdate(Http2StreamId stream_id, size_t update_delta);
 
-  enum class SendResult {
+  enum class SendResult : uint8_t {
     // All data was flushed.
     SEND_OK,
     // Not all data was flushed (due to flow control or TCP back pressure).
@@ -356,7 +356,7 @@ class QUICHE_EXPORT OgHttp2Session : public Http2Session,
   // Returns the int corresponding to the `result`, updating state as needed.
   int InterpretSendResult(SendResult result);
 
-  enum class ProcessBytesError {
+  enum class ProcessBytesError : uint8_t {
     // A general, unspecified error.
     kUnspecified,
     // The (server-side) session received an invalid client connection preface.
@@ -364,7 +364,7 @@ class QUICHE_EXPORT OgHttp2Session : public Http2Session,
     // A user/visitor callback failed with a fatal error.
     kVisitorCallbackFailed,
   };
-  using ProcessBytesResult = absl::variant<int64_t, ProcessBytesError>;
+  using ProcessBytesResult = std::variant<int64_t, ProcessBytesError>;
 
   // Attempts to process `bytes` and returns the number of bytes proccessed on
   // success or the processing error on failure.

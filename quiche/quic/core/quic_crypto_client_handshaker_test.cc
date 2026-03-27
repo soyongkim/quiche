@@ -84,6 +84,7 @@ class DummyProofSource : public ProofSource {
     callback->Run(true, chain, proof, /*details=*/nullptr);
   }
 
+  // TODO: b/451645567 - Define `GetCertChains()` instead of `GetCertChain()`.
   quiche::QuicheReferenceCountedPointer<Chain> GetCertChain(
       const QuicSocketAddress& /*server_address*/,
       const QuicSocketAddress& /*client_address*/,
@@ -103,7 +104,7 @@ class DummyProofSource : public ProofSource {
     callback->Run(true, "Dummy signature", /*details=*/nullptr);
   }
 
-  absl::InlinedVector<uint16_t, 8> SupportedTlsSignatureAlgorithms()
+  QuicSignatureAlgorithmVector SupportedTlsSignatureAlgorithms()
       const override {
     return {};
   }

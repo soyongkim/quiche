@@ -18,10 +18,12 @@
 #include "absl/strings/string_view.h"
 #include "openssl/digest.h"
 #include "openssl/sha.h"
+#include "quiche/quic/core/crypto/quic_random.h"
 #include "quiche/quic/core/quic_connection_id.h"
 #include "quiche/quic/core/quic_constants.h"
 #include "quiche/quic/core/quic_data_reader.h"
 #include "quiche/quic/core/quic_data_writer.h"
+#include "quiche/quic/core/quic_tag.h"
 #include "quiche/quic/core/quic_types.h"
 #include "quiche/quic/core/quic_utils.h"
 #include "quiche/quic/core/quic_versions.h"
@@ -29,11 +31,26 @@
 #include "quiche/quic/platform/api/quic_flag_utils.h"
 #include "quiche/quic/platform/api/quic_flags.h"
 #include "quiche/quic/platform/api/quic_ip_address.h"
+#include "quiche/quic/platform/api/quic_logging.h"
+#include "quiche/quic/platform/api/quic_socket_address.h"
 #include "quiche/common/platform/api/quiche_logging.h"
 #include "quiche/common/quiche_data_writer.h"
 #include "quiche/common/quiche_endian.h"
 
 namespace quic {
+
+namespace {
+std::string ObfuscateSni(const absl::string_view& input) {
+  static constexpr char kObfuscationKey[] = {0x42, 0x7b, 0x40, 0x63, 0x11, 0x2a,
+                                             0x6f, 0x05, 0x58, 0x1f, 0x7f, 0x33,
+                                             0x32, 0x4d, 0x64, 0x16};
+  std::string output = std::string(input);
+  for (size_t i = 0; i < output.size(); ++i) {
+    output[i] ^= kObfuscationKey[i % sizeof(kObfuscationKey)];
+  }
+  return output;
+}
+}  // namespace
 
 // Values of the TransportParameterId enum as defined in the
 // "Transport Parameter Encoding" section of draft-ietf-quic-transport.
@@ -65,6 +82,7 @@ enum TransportParameters::TransportParameterId : uint64_t {
   kDiscard = 0x173E,
 
   kGoogleHandshakeMessage = 0x26ab,
+  kDebuggingSni = 0x219bbcd0,
 
   kInitialRoundTripTime = 0x3127,
   kGoogleConnectionOptions = 0x3128,
@@ -76,11 +94,8 @@ enum TransportParameters::TransportParameterId : uint64_t {
   kGoogleQuicVersion =
       0x4752,  // Used to transmit version and supported_versions.
 
-  kMinAckDelay = 0xDE1A,             // draft-iyengar-quic-delayed-ack.
-  kMinAckDelayDraft10 = 0xFF04DE1B,  // draft-ietf-quic-delayed-ack-10.
-  kVersionInformationDraft =
-      0xFF73DB,                // draft-ietf-quic-version-negotiation-13.
-  kVersionInformation = 0x11,  // RFC 9368.
+  kMinAckDelayDraft10 = 0xFF04DE1B,  // draft-ietf-quic-delayed-ack-10 and -11.
+  kVersionInformation = 0x11,        // RFC 9368.
 
   // draft-ietf-quic-reliable-stream-reset.
   kReliableStreamReset = 0x17F7586D2CB571,
@@ -145,24 +160,20 @@ std::string TransportParameterIdToString(
       return "discard";
     case TransportParameters::kGoogleHandshakeMessage:
       return "google_handshake_message";
+    case TransportParameters::kDebuggingSni:
+      return "debugging_sni";
     case TransportParameters::kInitialRoundTripTime:
       return "initial_round_trip_time";
     case TransportParameters::kGoogleConnectionOptions:
       return "google_connection_options";
     case TransportParameters::kGoogleQuicVersion:
+      if (GetQuicRestartFlag(quic_stop_parsing_legacy_version_info)) {
+        return absl::StrCat("Unknown(", param_id, ")");
+      }
       return "google-version";
-    case TransportParameters::kMinAckDelay:
     case TransportParameters::kMinAckDelayDraft10:
       return "min_ack_delay_us";
     case TransportParameters::kVersionInformation:
-      if (!GetQuicReloadableFlag(quic_version_negotiation_rfc)) {
-        break;
-      }
-      return "version_information";
-    case TransportParameters::kVersionInformationDraft:
-      if (GetQuicReloadableFlag(quic_version_negotiation_rfc)) {
-        break;
-      }
       return "version_information";
     case TransportParameters::kReliableStreamReset:
       return "reliable_stream_reset";
@@ -235,17 +246,15 @@ bool TransportParameterIdIsKnown(
     case TransportParameters::kMaxDatagramFrameSize:
     case TransportParameters::kDiscard:
     case TransportParameters::kGoogleHandshakeMessage:
+    case TransportParameters::kDebuggingSni:
     case TransportParameters::kInitialRoundTripTime:
     case TransportParameters::kGoogleConnectionOptions:
-    case TransportParameters::kGoogleQuicVersion:
-    case TransportParameters::kMinAckDelay:
     case TransportParameters::kMinAckDelayDraft10:
     case TransportParameters::kReliableStreamReset:
-      return true;
     case TransportParameters::kVersionInformation:
-      return GetQuicReloadableFlag(quic_version_negotiation_rfc);
-    case TransportParameters::kVersionInformationDraft:
-      return !GetQuicReloadableFlag(quic_version_negotiation_rfc);
+      return true;
+    case TransportParameters::kGoogleQuicVersion:
+      return !GetQuicRestartFlag(quic_stop_parsing_legacy_version_info);
   }
   return false;
 }
@@ -461,7 +470,6 @@ std::string TransportParameters::ToString() const {
   rv += initial_max_streams_uni.ToString(/*for_use_in_list=*/true);
   rv += ack_delay_exponent.ToString(/*for_use_in_list=*/true);
   rv += max_ack_delay.ToString(/*for_use_in_list=*/true);
-  rv += min_ack_delay_us.ToString(/*for_use_in_list=*/true);
   if (min_ack_delay_us_draft10.has_value()) {
     absl::StrAppend(&rv, " ", TransportParameterIdToString(kMinAckDelayDraft10),
                     " ", *min_ack_delay_us_draft10);
@@ -494,6 +502,10 @@ std::string TransportParameters::ToString() const {
     absl::StrAppend(&rv, " ",
                     TransportParameterIdToString(kGoogleHandshakeMessage),
                     " length: ", google_handshake_message->length());
+  }
+  if (debugging_sni.has_value()) {
+    absl::StrAppend(&rv, " ", TransportParameterIdToString(kDebuggingSni),
+                    " value: ", *debugging_sni);
   }
   rv += initial_round_trip_time_us.ToString(/*for_use_in_list=*/true);
   if (google_connection_options.has_value()) {
@@ -540,16 +552,14 @@ TransportParameters::TransportParameters()
                          kMaxAckDelayExponentTransportParam),
       max_ack_delay(kMaxAckDelay, kDefaultMaxAckDelayTransportParam, 0,
                     kMaxMaxAckDelayTransportParam),
-      min_ack_delay_us(kMinAckDelay, 0, 0,
-                       kMaxMaxAckDelayTransportParam * kNumMicrosPerMilli),
-      disable_active_migration(false),
       active_connection_id_limit(kActiveConnectionIdLimit,
                                  kDefaultActiveConnectionIdLimitTransportParam,
                                  kMinActiveConnectionIdLimitTransportParam,
                                  quiche::kVarInt62MaxValue),
       max_datagram_frame_size(kMaxDatagramFrameSize),
-      reliable_stream_reset(false),
-      initial_round_trip_time_us(kInitialRoundTripTime)
+      initial_round_trip_time_us(kInitialRoundTripTime),
+      disable_active_migration(false),
+      reliable_stream_reset(false)
 // Important note: any new transport parameters must be added
 // to TransportParameters::AreValid, SerializeTransportParameters and
 // ParseTransportParameters, TransportParameters's custom copy constructor, the
@@ -557,8 +567,7 @@ TransportParameters::TransportParameters()
 {}
 
 TransportParameters::TransportParameters(const TransportParameters& other)
-    : perspective(other.perspective),
-      legacy_version_information(other.legacy_version_information),
+    : legacy_version_information(other.legacy_version_information),
       version_information(other.version_information),
       original_destination_connection_id(
           other.original_destination_connection_id),
@@ -575,17 +584,18 @@ TransportParameters::TransportParameters(const TransportParameters& other)
       initial_max_streams_uni(other.initial_max_streams_uni),
       ack_delay_exponent(other.ack_delay_exponent),
       max_ack_delay(other.max_ack_delay),
-      min_ack_delay_us(other.min_ack_delay_us),
       min_ack_delay_us_draft10(other.min_ack_delay_us_draft10),
-      disable_active_migration(other.disable_active_migration),
       active_connection_id_limit(other.active_connection_id_limit),
       initial_source_connection_id(other.initial_source_connection_id),
       retry_source_connection_id(other.retry_source_connection_id),
       max_datagram_frame_size(other.max_datagram_frame_size),
-      reliable_stream_reset(other.reliable_stream_reset),
       initial_round_trip_time_us(other.initial_round_trip_time_us),
-      discard_length(other.discard_length),
       google_handshake_message(other.google_handshake_message),
+      discard_length(other.discard_length),
+      perspective(other.perspective),
+      disable_active_migration(other.disable_active_migration),
+      reliable_stream_reset(other.reliable_stream_reset),
+      debugging_sni(other.debugging_sni),
       google_connection_options(other.google_connection_options),
       custom_parameters(other.custom_parameters) {
   if (other.preferred_address) {
@@ -616,7 +626,6 @@ bool TransportParameters::operator==(const TransportParameters& rhs) const {
             rhs.initial_max_streams_uni.value() &&
         ack_delay_exponent.value() == rhs.ack_delay_exponent.value() &&
         max_ack_delay.value() == rhs.max_ack_delay.value() &&
-        min_ack_delay_us.value() == rhs.min_ack_delay_us.value() &&
         min_ack_delay_us_draft10 == rhs.min_ack_delay_us_draft10 &&
         disable_active_migration == rhs.disable_active_migration &&
         active_connection_id_limit.value() ==
@@ -630,6 +639,7 @@ bool TransportParameters::operator==(const TransportParameters& rhs) const {
             rhs.initial_round_trip_time_us.value() &&
         discard_length == rhs.discard_length &&
         google_handshake_message == rhs.google_handshake_message &&
+        debugging_sni == rhs.debugging_sni &&
         google_connection_options == rhs.google_connection_options &&
         custom_parameters == rhs.custom_parameters)) {
     return false;
@@ -705,9 +715,19 @@ bool TransportParameters::AreValid(std::string* error_details) const {
     *error_details = "Server cannot send google_handshake_message";
     return false;
   }
+  if (perspective == Perspective::IS_SERVER && debugging_sni.has_value()) {
+    *error_details = "Server cannot send debugging_sni";
+    return false;
+  }
   if (perspective == Perspective::IS_SERVER &&
       initial_round_trip_time_us.value() > 0) {
     *error_details = "Server cannot send initial round trip time";
+    return false;
+  }
+  if (min_ack_delay_us_draft10.has_value() &&
+      (*min_ack_delay_us_draft10 >
+       (max_ack_delay.value() * kNumMicrosPerMilli))) {
+    *error_details = "min_ack_delay cannot be larger than max_ack_delay";
     return false;
   }
   if (version_information.has_value()) {
@@ -741,7 +761,7 @@ bool TransportParameters::AreValid(std::string* error_details) const {
       initial_max_stream_data_uni.IsValid() &&
       initial_max_streams_bidi.IsValid() && initial_max_streams_uni.IsValid() &&
       ack_delay_exponent.IsValid() && max_ack_delay.IsValid() &&
-      min_ack_delay_us.IsValid() && active_connection_id_limit.IsValid() &&
+      active_connection_id_limit.IsValid() &&
       max_datagram_frame_size.IsValid() && initial_round_trip_time_us.IsValid();
   if (!ok) {
     *error_details = "Invalid transport parameters " + this->ToString();
@@ -759,12 +779,16 @@ bool SerializeTransportParameters(const TransportParameters& in,
         << "Not serializing invalid transport parameters: " << error_details;
     return false;
   }
-  if (!in.legacy_version_information.has_value() ||
-      in.legacy_version_information->version == 0 ||
-      (in.perspective == Perspective::IS_SERVER &&
-       in.legacy_version_information->supported_versions.empty())) {
-    QUIC_BUG(missing versions) << "Refusing to serialize without versions";
-    return false;
+  if (GetQuicRestartFlag(quic_stop_sending_legacy_version_info)) {
+    QUIC_RESTART_FLAG_COUNT_N(quic_stop_sending_legacy_version_info, 1, 4);
+  } else {
+    if (!in.legacy_version_information.has_value() ||
+        in.legacy_version_information->version == 0 ||
+        (in.perspective == Perspective::IS_SERVER &&
+         in.legacy_version_information->supported_versions.empty())) {
+      QUIC_BUG(missing versions) << "Refusing to serialize without versions";
+      return false;
+    }
   }
   TransportParameters::ParameterMap custom_parameters = in.custom_parameters;
   for (const auto& kv : custom_parameters) {
@@ -808,7 +832,6 @@ bool SerializeTransportParameters(const TransportParameters& in,
       kIntegerParameterLength +           // initial_max_streams_uni
       kIntegerParameterLength +           // ack_delay_exponent
       kIntegerParameterLength +           // max_ack_delay
-      kIntegerParameterLength +           // min_ack_delay_us
       kIntegerParameterLength +           // min_ack_delay_us_draft10
       kTypeAndValueLength +               // disable_active_migration
       kPreferredAddressParameterLength +  // preferred_address
@@ -818,8 +841,11 @@ bool SerializeTransportParameters(const TransportParameters& in,
       kIntegerParameterLength +           // max_datagram_frame_size
       kTypeAndValueLength +               // reliable_stream_reset
       kIntegerParameterLength +           // initial_round_trip_time_us
-      kTypeAndValueLength +               // discard
+      kTypeAndValueLength +              // discard
+
+
       kTypeAndValueLength +               // google_handshake_message
+      kTypeAndValueLength +               // debugging_sni
       kTypeAndValueLength +               // google_connection_options
       kTypeAndValueLength;                // google-version
 
@@ -836,13 +862,13 @@ bool SerializeTransportParameters(const TransportParameters& in,
       TransportParameters::kInitialMaxStreamsUni,
       TransportParameters::kAckDelayExponent,
       TransportParameters::kMaxAckDelay,
-      TransportParameters::kMinAckDelay,
       TransportParameters::kMinAckDelayDraft10,
       TransportParameters::kActiveConnectionIdLimit,
       TransportParameters::kMaxDatagramFrameSize,
       TransportParameters::kReliableStreamReset,
       TransportParameters::kDiscard,
       TransportParameters::kGoogleHandshakeMessage,
+      TransportParameters::kDebuggingSni,
       TransportParameters::kInitialRoundTripTime,
       TransportParameters::kDisableActiveMigration,
       TransportParameters::kPreferredAddress,
@@ -882,6 +908,10 @@ bool SerializeTransportParameters(const TransportParameters& in,
   // google_handshake_message.
   if (in.google_handshake_message.has_value()) {
     max_transport_param_length += in.google_handshake_message->length();
+  }
+  // debugging_sni.
+  if (in.debugging_sni.has_value()) {
+    max_transport_param_length += in.debugging_sni->length();
   }
 
   // Add a random GREASE transport parameter, as defined in the
@@ -1040,10 +1070,6 @@ bool SerializeTransportParameters(const TransportParameters& in,
           return false;
         }
       } break;
-      // min_ack_delay_us
-      case TransportParameters::kMinAckDelay: {
-        QUICHE_DCHECK(in.min_ack_delay_us.value() == 0);
-      } break;
       // min_ack_delay_us_draft10
       case TransportParameters::kMinAckDelayDraft10: {
         if (!in.min_ack_delay_us_draft10.has_value()) {
@@ -1095,6 +1121,21 @@ bool SerializeTransportParameters(const TransportParameters& in,
             QUIC_BUG(Failed to write google_handshake_message)
                 << "Failed to write google_handshake_message: "
                 << *in.google_handshake_message << " for " << in;
+            return false;
+          }
+        }
+      } break;
+      // debugging_sni.
+      case TransportParameters::kDebuggingSni: {
+        if (in.debugging_sni.has_value()) {
+          QUICHE_DCHECK_EQ(Perspective::IS_CLIENT, in.perspective);
+          // Obfuscate the SNI before writing it to the transport parameters.
+          std::string obfuscated_sni = ObfuscateSni(*in.debugging_sni);
+          if (!writer.WriteVarInt62(TransportParameters::kDebuggingSni) ||
+              !writer.WriteStringPieceVarInt62(obfuscated_sni)) {
+            QUIC_BUG(failed_to_write_debugging_sni)
+                << "Failed to write debugging_sni: " << *in.debugging_sni
+                << " obfuscated to: " << obfuscated_sni << " for " << in;
             return false;
           }
         }
@@ -1239,6 +1280,11 @@ bool SerializeTransportParameters(const TransportParameters& in,
       } break;
       // Google-specific version extension.
       case TransportParameters::kGoogleQuicVersion: {
+        if (GetQuicRestartFlag(quic_stop_sending_legacy_version_info)) {
+          QUIC_RESTART_FLAG_COUNT_N(quic_stop_sending_legacy_version_info, 2,
+                                    4);
+          break;
+        }
         if (!in.legacy_version_information.has_value()) {
           break;
         }
@@ -1296,15 +1342,7 @@ bool SerializeTransportParameters(const TransportParameters& in,
         const uint64_t version_information_length =
             sizeof(in.version_information->chosen_version) +
             sizeof(QuicVersionLabel) * other_versions.size();
-        TransportParameters::TransportParameterId version_information_param_id =
-            TransportParameters::kVersionInformation;
-        if (!GetQuicReloadableFlag(quic_version_negotiation_rfc)) {
-          version_information_param_id =
-              TransportParameters::kVersionInformationDraft;
-        } else {
-          QUIC_RELOADABLE_FLAG_COUNT_N(quic_version_negotiation_rfc, 1, 3);
-        }
-        if (!writer.WriteVarInt62(version_information_param_id) ||
+        if (!writer.WriteVarInt62(TransportParameters::kVersionInformation) ||
             !writer.WriteVarInt62(
                 /* transport parameter length */ version_information_length) ||
             !writer.WriteUInt32(in.version_information->chosen_version)) {
@@ -1555,6 +1593,14 @@ bool ParseTransportParameters(ParsedQuicVersion version,
         out->google_handshake_message =
             std::string(value_reader.ReadRemainingPayload());
         break;
+      case TransportParameters::kDebuggingSni:
+        if (out->debugging_sni.has_value()) {
+          *error_details = "Received a second debugging_sni";
+          return false;
+        }
+        // Deobfuscate the SNI and store it in the transport parameters.
+        out->debugging_sni = ObfuscateSni(value_reader.ReadRemainingPayload());
+        break;
       case TransportParameters::kInitialRoundTripTime:
         parse_success =
             out->initial_round_trip_time_us.Read(&value_reader, error_details);
@@ -1582,6 +1628,19 @@ bool ParseTransportParameters(ParsedQuicVersion version,
         }
       } break;
       case TransportParameters::kGoogleQuicVersion: {
+        if (GetQuicRestartFlag(quic_stop_parsing_legacy_version_info)) {
+          QUIC_RESTART_FLAG_COUNT_N(quic_stop_parsing_legacy_version_info, 3,
+                                    3);
+          if (out->custom_parameters.find(param_id) !=
+              out->custom_parameters.end()) {
+            *error_details = "Received a second unknown parameter" +
+                             TransportParameterIdToString(param_id);
+            return false;
+          }
+          out->custom_parameters[param_id] =
+              std::string(value_reader.ReadRemainingPayload());
+          break;
+        }
         if (!out->legacy_version_information.has_value()) {
           out->legacy_version_information =
               TransportParameters::LegacyVersionInformation();
@@ -1610,19 +1669,6 @@ bool ParseTransportParameters(ParsedQuicVersion version,
         }
       } break;
       case TransportParameters::kVersionInformation: {
-        if (!GetQuicReloadableFlag(quic_version_negotiation_rfc)) {
-          // Treat this as an unknown parameter.
-          if (out->custom_parameters.find(param_id) !=
-              out->custom_parameters.end()) {
-            *error_details = "Received a second unknown parameter" +
-                             TransportParameterIdToString(param_id);
-            return false;
-          }
-          out->custom_parameters[param_id] =
-              std::string(value_reader.ReadRemainingPayload());
-          break;
-        }
-        QUIC_RELOADABLE_FLAG_COUNT_N(quic_version_negotiation_rfc, 2, 3);
         if (out->version_information.has_value()) {
           *error_details = "Received a second version_information";
           return false;
@@ -1642,43 +1688,6 @@ bool ParseTransportParameters(ParsedQuicVersion version,
           out->version_information->other_versions.push_back(other_version);
         }
       } break;
-      case TransportParameters::kVersionInformationDraft: {
-        if (GetQuicReloadableFlag(quic_version_negotiation_rfc)) {
-          QUIC_RELOADABLE_FLAG_COUNT_N(quic_version_negotiation_rfc, 3, 3);
-          // Treat this as an unknown parameter.
-          if (out->custom_parameters.find(param_id) !=
-              out->custom_parameters.end()) {
-            *error_details = "Received a second unknown parameter" +
-                             TransportParameterIdToString(param_id);
-            return false;
-          }
-          out->custom_parameters[param_id] =
-              std::string(value_reader.ReadRemainingPayload());
-          break;
-        }
-        if (out->version_information.has_value()) {
-          *error_details = "Received a second version_information";
-          return false;
-        }
-        out->version_information = TransportParameters::VersionInformation();
-        if (!value_reader.ReadUInt32(
-                &out->version_information->chosen_version)) {
-          *error_details = "Failed to read chosen version";
-          return false;
-        }
-        while (!value_reader.IsDoneReading()) {
-          QuicVersionLabel other_version;
-          if (!value_reader.ReadUInt32(&other_version)) {
-            *error_details = "Failed to parse other version";
-            return false;
-          }
-          out->version_information->other_versions.push_back(other_version);
-        }
-      } break;
-      case TransportParameters::kMinAckDelay:
-        parse_success =
-            out->min_ack_delay_us.Read(&value_reader, error_details);
-        break;
       case TransportParameters::kMinAckDelayDraft10: {
         if (out->min_ack_delay_us_draft10.has_value()) {
           *error_details = "Received a second min_ack_delay_us_draft10";
@@ -1841,5 +1850,4 @@ void DegreaseTransportParameters(TransportParameters& parameters) {
     parameters.version_information->other_versions = std::move(clean_versions);
   }
 }
-
 }  // namespace quic

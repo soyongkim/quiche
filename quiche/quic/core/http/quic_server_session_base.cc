@@ -32,14 +32,16 @@ QuicServerSessionBase::QuicServerSessionBase(
     QuicConnection* connection, Visitor* visitor,
     QuicCryptoServerStreamBase::Helper* helper,
     const QuicCryptoServerConfig* crypto_config,
-    QuicCompressedCertsCache* compressed_certs_cache)
-    : QuicSpdySession(connection, visitor, config, supported_versions),
-      crypto_config_(crypto_config),
-      compressed_certs_cache_(compressed_certs_cache),
-      helper_(helper),
+    QuicCompressedCertsCache* compressed_certs_cache,
+    QuicPriorityType priority_type)
+    : QuicSpdySession(connection, visitor, config, supported_versions,
+                      priority_type),
       bandwidth_resumption_enabled_(false),
+      compressed_certs_cache_(compressed_certs_cache),
       bandwidth_estimate_sent_to_client_(QuicBandwidth::Zero()),
-      last_scup_time_(QuicTime::Zero()) {}
+      crypto_config_(crypto_config),
+      last_scup_time_(QuicTime::Zero()),
+      helper_(helper) {}
 
 QuicServerSessionBase::~QuicServerSessionBase() {}
 
@@ -59,7 +61,7 @@ void QuicServerSessionBase::OnConfigNegotiated() {
   // Set the initial rtt from cached_network_params.min_rtt_ms, which comes from
   // a validated address token. This will override the initial rtt that may have
   // been set by the transport parameters.
-  if (version().UsesTls() && cached_network_params != nullptr) {
+  if (version().IsIetfQuic() && cached_network_params != nullptr) {
     if (cached_network_params->serving_region() == serving_region_) {
       QUIC_CODE_COUNT(quic_server_received_network_params_at_same_region);
       if (config()->HasReceivedConnectionOptions() &&
@@ -83,7 +85,7 @@ void QuicServerSessionBase::OnConfigNegotiated() {
   }
 
   if (GetQuicReloadableFlag(quic_enable_disable_resumption) &&
-      version().UsesTls() &&
+      version().IsIetfQuic() &&
       ContainsQuicTag(config()->ReceivedConnectionOptions(), kNRES) &&
       crypto_stream_->ResumptionAttempted()) {
     QUIC_RELOADABLE_FLAG_COUNT(quic_enable_disable_resumption);
@@ -105,7 +107,7 @@ void QuicServerSessionBase::OnConfigNegotiated() {
   // resumption.
   if (cached_network_params != nullptr &&
       cached_network_params->serving_region() == serving_region_) {
-    if (!version().UsesTls()) {
+    if (!version().IsIetfQuic()) {
       // Log the received connection parameters, regardless of how they
       // get used for bandwidth resumption.
       connection()->OnReceiveConnectionState(*cached_network_params);
@@ -191,8 +193,8 @@ void QuicServerSessionBase::OnCongestionWindowChange(QuicTime now) {
     return;
   }
 
-  if (version().UsesTls()) {
-    if (version().HasIetfQuicFrames() && MaybeSendAddressToken()) {
+  if (version().IsIetfQuic()) {
+    if (MaybeSendAddressToken()) {
       bandwidth_estimate_sent_to_client_ = new_bandwidth_estimate;
     }
   } else {
@@ -252,21 +254,6 @@ bool QuicServerSessionBase::ShouldCreateOutgoingBidirectionalStream() {
   return CanOpenNextOutgoingBidirectionalStream();
 }
 
-bool QuicServerSessionBase::ShouldCreateOutgoingUnidirectionalStream() {
-  if (!connection()->connected()) {
-    QUIC_BUG(quic_bug_12513_3)
-        << "ShouldCreateOutgoingUnidirectionalStream called when disconnected";
-    return false;
-  }
-  if (!crypto_stream_->encryption_established()) {
-    QUIC_BUG(quic_bug_10393_5)
-        << "Encryption not established so no outgoing stream created.";
-    return false;
-  }
-
-  return CanOpenNextOutgoingUnidirectionalStream();
-}
-
 QuicCryptoServerStreamBase* QuicServerSessionBase::GetMutableCryptoStream() {
   return crypto_stream_.get();
 }
@@ -283,7 +270,7 @@ int32_t QuicServerSessionBase::BandwidthToCachedParameterBytesPerSecond(
 }
 
 void QuicServerSessionBase::SendSettingsToCryptoStream() {
-  if (!version().UsesTls()) {
+  if (!version().IsIetfQuic()) {
     return;
   }
   std::string settings_frame = HttpEncoder::SerializeSettingsFrame(settings());
@@ -308,7 +295,7 @@ QuicSSLConfig QuicServerSessionBase::GetSSLConfig() const {
     return ssl_config;
   }
 
-  absl::InlinedVector<uint16_t, 8> signature_algorithms =
+  QuicSignatureAlgorithmVector signature_algorithms =
       crypto_config_->proof_source()->SupportedTlsSignatureAlgorithms();
   if (!signature_algorithms.empty()) {
     ssl_config.signing_algorithm_prefs = std::move(signature_algorithms);

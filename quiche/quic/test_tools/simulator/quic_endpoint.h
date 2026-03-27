@@ -56,7 +56,7 @@ class QuicEndpoint : public QuicEndpointBase,
   void OnRstStream(const QuicRstStreamFrame& /*frame*/) override {}
   void OnResetStreamAt(const QuicResetStreamAtFrame& /*frame*/) override {}
   void OnGoAway(const QuicGoAwayFrame& /*frame*/) override {}
-  void OnMessageReceived(absl::string_view /*message*/) override {}
+  void OnDatagramReceived(absl::string_view /*datagram*/) override {}
   void OnHandshakeDoneReceived() override {}
   void OnNewTokenReceived(absl::string_view /*token*/) override {}
   void OnConnectionClosed(const QuicConnectionCloseFrame& /*frame*/,
@@ -64,9 +64,6 @@ class QuicEndpoint : public QuicEndpointBase,
   void OnWriteBlocked() override {}
   void OnSuccessfulVersionNegotiation(
       const ParsedQuicVersion& /*version*/) override {}
-  void OnPacketReceived(const QuicSocketAddress& /*self_address*/,
-                        const QuicSocketAddress& /*peer_address*/,
-                        bool /*is_connectivity_probe*/) override {}
   void OnCongestionWindowChange(QuicTime /*now*/) override {}
   void OnConnectionMigration(AddressChangeType /*type*/) override {}
   void OnPathDegrading() override {}
@@ -118,12 +115,16 @@ class QuicEndpoint : public QuicEndpointBase,
   QuicByteCount GetFlowControlSendWindowSize(QuicStreamId /*id*/) override {
     return std::numeric_limits<QuicByteCount>::max();
   }
+  bool MaybeMitigateWriteError(const WriteResult& /*write_result*/) override {
+    return false;
+  }
 
   // End QuicConnectionVisitorInterface implementation.
 
   // Begin SessionNotifierInterface methods:
   bool OnFrameAcked(const QuicFrame& frame, QuicTime::Delta ack_delay_time,
-                    QuicTime receive_timestamp) override;
+                    QuicTime receive_timestamp,
+                    bool is_retransmission) override;
   void OnStreamFrameRetransmitted(const QuicStreamFrame& /*frame*/) override {}
   void OnFrameLost(const QuicFrame& frame) override;
   bool RetransmitFrames(const QuicFrames& frames,

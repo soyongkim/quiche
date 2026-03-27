@@ -105,13 +105,9 @@ void MovePackets(const QuicConnection& source_conn,
   QUICHE_CHECK(!packets.empty());
 
   SimpleQuicFramer framer(source_conn.supported_versions(), dest_perspective);
-  QuicFramerPeer::SetLastSerializedServerConnectionId(framer.framer(),
-                                                      TestConnectionId());
 
   SimpleQuicFramer null_encryption_framer(source_conn.supported_versions(),
                                           dest_perspective);
-  QuicFramerPeer::SetLastSerializedServerConnectionId(
-      null_encryption_framer.framer(), TestConnectionId());
 
   for (const QuicEncryptedPacket* const packet : packets) {
     if (!dest_conn.connected()) {
@@ -142,7 +138,7 @@ void MovePackets(const QuicConnection& source_conn,
     dest_conn.OnDecryptedPacket(packet->length(),
                                 framer.last_decrypted_level());
 
-    if (dest_stream.handshake_protocol() == PROTOCOL_TLS1_3) {
+    if (dest_stream.version().IsIetfQuic()) {
       // Try to process the packet with a framer that only has the NullDecrypter
       // for decryption. If ProcessPacket succeeds, that means the packet was
       // encrypted with the NullEncrypter. With the TLS handshaker in use, no
@@ -165,8 +161,7 @@ void MovePackets(const QuicConnection& source_conn,
 
     QuicConnectionPeer::SetCurrentPacket(&dest_conn, packet->AsStringPiece());
     for (const auto& stream_frame : framer.stream_frames()) {
-      if (process_stream_data &&
-          dest_stream.handshake_protocol() == PROTOCOL_TLS1_3) {
+      if (process_stream_data && dest_stream.version().IsIetfQuic()) {
         // Deliver STREAM_FRAME such that application state is available and can
         // be stored along with resumption ticket in session cache,
         dest_conn.OnStreamFrame(*stream_frame);
@@ -316,10 +311,11 @@ class FullChloGenerator {
 
 }  // namespace
 
-std::unique_ptr<QuicCryptoServerConfig> CryptoServerConfigForTesting() {
+std::unique_ptr<QuicCryptoServerConfig> CryptoServerConfigForTesting(
+    const std::string& trust_anchor_id) {
   return std::make_unique<QuicCryptoServerConfig>(
       QuicCryptoServerConfig::TESTING, QuicRandom::GetInstance(),
-      ProofSourceForTesting(), KeyExchangeSource::Default());
+      ProofSourceForTesting(trust_anchor_id), KeyExchangeSource::Default());
 }
 
 int HandshakeWithFakeServer(QuicConfig* server_quic_config,
@@ -387,7 +383,7 @@ int HandshakeWithFakeClient(MockQuicConnectionHelper* helper,
     supported_versions.erase(
         std::remove_if(supported_versions.begin(), supported_versions.end(),
                        [](const ParsedQuicVersion& version) {
-                         return version.handshake_protocol != PROTOCOL_TLS1_3;
+                         return !version.IsIetfQuic();
                        }),
         supported_versions.end());
     QUICHE_CHECK(!options.only_quic_crypto_versions);
@@ -395,8 +391,7 @@ int HandshakeWithFakeClient(MockQuicConnectionHelper* helper,
     supported_versions.erase(
         std::remove_if(supported_versions.begin(), supported_versions.end(),
                        [](const ParsedQuicVersion& version) {
-                         return version.handshake_protocol !=
-                                PROTOCOL_QUIC_CRYPTO;
+                         return version.IsIetfQuic();
                        }),
         supported_versions.end());
   }
@@ -450,7 +445,7 @@ void SendHandshakeMessageToStream(QuicCryptoStream* stream,
                                   Perspective /*perspective*/) {
   const QuicData& data = message.GetSerialized();
   QuicSession* session = QuicStreamPeer::session(stream);
-  if (!QuicVersionUsesCryptoFrames(session->transport_version())) {
+  if (!VersionIsIetfQuic(session->transport_version())) {
     QuicStreamFrame frame(
         QuicUtils::GetCryptoStreamId(session->transport_version()), false,
         stream->crypto_bytes_read(), data.AsStringPiece());
@@ -838,6 +833,7 @@ CryptoHandshakeMessage CreateCHLO(
 CryptoHandshakeMessage GenerateDefaultInchoateCHLO(
     const QuicClock* clock, QuicTransportVersion version,
     QuicCryptoServerConfig* crypto_config) {
+  QUICHE_DCHECK_EQ(version, QUIC_VERSION_46);
   // clang-format off
   return CreateCHLO(
       {{"PDMD", "X509"},
@@ -847,7 +843,7 @@ CryptoHandshakeMessage GenerateDefaultInchoateCHLO(
        {"NONC", GenerateClientNonceHex(clock, crypto_config).c_str()},
        {"VER\0", QuicVersionLabelToString(
            CreateQuicVersionLabel(
-            ParsedQuicVersion(PROTOCOL_QUIC_CRYPTO, version))).c_str()}},
+            ParsedQuicVersion(version))).c_str()}},
       kClientHelloMinimumSize);
   // clang-format on
 }
@@ -887,11 +883,11 @@ void GenerateFullCHLO(
     quiche::QuicheReferenceCountedPointer<QuicSignedServerConfig> signed_config,
     QuicCompressedCertsCache* compressed_certs_cache,
     CryptoHandshakeMessage* out) {
+  QUICHE_DCHECK_EQ(transport_version, QUIC_VERSION_46);
   // Pass a inchoate CHLO.
-  FullChloGenerator generator(
-      crypto_config, server_addr, client_addr, clock,
-      ParsedQuicVersion(PROTOCOL_QUIC_CRYPTO, transport_version), signed_config,
-      compressed_certs_cache, out);
+  FullChloGenerator generator(crypto_config, server_addr, client_addr, clock,
+                              ParsedQuicVersion(transport_version),
+                              signed_config, compressed_certs_cache, out);
   crypto_config->ValidateClientHello(
       inchoate_chlo, client_addr, server_addr, transport_version, clock,
       signed_config, generator.GetValidateClientHelloCallback());
@@ -903,11 +899,12 @@ constexpr char kTestProofHostname[] = "test.example.com";
 
 class TestProofSource : public ProofSourceX509 {
  public:
-  TestProofSource()
+  explicit TestProofSource(const std::string& trust_anchor_id)
       : ProofSourceX509(
             quiche::QuicheReferenceCountedPointer<ProofSource::Chain>(
                 new ProofSource::Chain(
-                    std::vector<std::string>{std::string(kTestCertificate)})),
+                    std::vector<std::string>{std::string(kTestCertificate)},
+                    trust_anchor_id)),
             std::move(*CertificatePrivateKey::LoadFromDer(
                 kTestCertificatePrivateKey))) {
     QUICHE_DCHECK(valid());
@@ -989,8 +986,9 @@ class TestProofVerifier : public ProofVerifier {
 
 }  // namespace
 
-std::unique_ptr<ProofSource> ProofSourceForTesting() {
-  return std::make_unique<TestProofSource>();
+std::unique_ptr<ProofSource> ProofSourceForTesting(
+    const std::string& trust_anchor_id) {
+  return std::make_unique<TestProofSource>(trust_anchor_id);
 }
 
 std::unique_ptr<ProofVerifier> ProofVerifierForTesting() {

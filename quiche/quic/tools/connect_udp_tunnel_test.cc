@@ -24,9 +24,9 @@
 #include "quiche/quic/tools/quic_simple_server_backend.h"
 #include "quiche/common/masque/connect_udp_datagram_payload.h"
 #include "quiche/common/platform/api/quiche_googleurl.h"
-#include "quiche/common/platform/api/quiche_mem_slice.h"
 #include "quiche/common/platform/api/quiche_test.h"
 #include "quiche/common/platform/api/quiche_url_utils.h"
+#include "quiche/common/quiche_mem_slice.h"
 
 namespace quic::test {
 namespace {
@@ -56,7 +56,7 @@ class MockStream : public QuicSpdyStream {
 
   void OnBodyAvailable() override {}
 
-  MOCK_METHOD(MessageStatus, SendHttp3Datagram, (absl::string_view data),
+  MOCK_METHOD(DatagramStatus, SendHttp3Datagram, (absl::string_view data),
               (override));
 };
 
@@ -315,7 +315,7 @@ TEST_F(ConnectUdpTunnelTest, ReceiveFromTarget) {
       stream_,
       SendHttp3Datagram(
           quiche::ConnectUdpDatagramUdpPacketPayload(kData).Serialize()))
-      .WillOnce(Return(MESSAGE_STATUS_SUCCESS));
+      .WillOnce(Return(DATAGRAM_STATUS_SUCCESS));
 
   quiche::HttpHeaderBlock request_headers;
   request_headers[":method"] = "CONNECT";

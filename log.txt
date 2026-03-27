@@ -1,0 +1,114 @@
+smalldragon@smalldragon-Latitude-5550:~/Workspace/quiche$ ./tcp_client.sh 
+TCP connected to 127.0.0.1:4433
+[SD] Send CONNECT to proxy
+[SD] Sending h1.1 CONNECT request to www.google.com:443
+[SD] Received Data from transport: 39 bytes - 103ms
+[SD] Received CONNECT response: HTTP/1.1 200 Connection established
+
+ - 103ms
+[SD] Start TLS handshaking
+[SD] TLS wrote 517 bytes to transport
+[SD] Received Data from transport: 936 bytes - 101ms
+[SD] TLS connected - 204ms
+[SD] TLS wrote 227 bytes to transport
+[SD] Received Data from transport: 184 bytes - 8ms
+[SD] Received Data from transport: 31 bytes - 40ms
+[SD] Received Data from transport: 1129 bytes - 2629ms
+[SD] Received Data from transport: 1188 bytes - 253ms
+[SD] Received Data from transport: 1188 bytes - 273ms
+[SD] Received Data from transport: 1188 bytes - 285ms
+[SD] Received Data from transport: 1188 bytes - 292ms
+[SD] Received Data from transport: 1188 bytes - 295ms
+[SD] Received Data from transport: 1188 bytes - 283ms
+[SD] Received Data from transport: 1188 bytes - 284ms
+[SD] Received Data from transport: 1188 bytes - 284ms
+[SD] Received Data from transport: 1188 bytes - 281ms
+[SD] Received Data from transport: 1188 bytes - 9ms
+[SD] Received Data from transport: 3488 bytes - 569ms
+[SD] Received Data from transport: 1188 bytes - 4ms
+[SD] Received Data from transport: 1173 bytes - 561ms
+[SD] Received Data from transport: 1186 bytes - 293ms
+[SD] Received Data from transport: 2354 bytes - 294ms
+[SD] Received Data from transport: 1186 bytes - 293ms
+[SD] Received Data from transport: 1186 bytes - 291ms
+[SD] Received Data from transport: 1186 bytes - 287ms
+[SD] Received Data from transport: 1186 bytes - 283ms
+[SD] Received Data from transport: 1186 bytes - 279ms
+[SD] Received Data from transport: 1186 bytes - 274ms
+[SD] Received Data from transport: 2335 bytes - 270ms
+[SD] Received Data from transport: 1186 bytes - 268ms
+[SD] Received Data from transport: 1186 bytes - 263ms
+[SD] Received Data from transport: 1186 bytes - 260ms
+[SD] Received Data from transport: 1186 bytes - 256ms
+[SD] Received Data from transport: 6934 bytes - 254ms
+[SD] Received Data from transport: 1186 bytes - 251ms
+[SD] Received Data from transport: 1186 bytes - 249ms
+[SD] Received Data from transport: 3490 bytes - 251ms
+[SD] Received Data from transport: 1186 bytes - 252ms
+[SD] Received Data from transport: 2288 bytes - 103ms
+Received h2 response headers: 
+{
+  :status 200
+  date Thu, 03 Apr 2025 19:11:04 GMT
+  expires -1
+  cache-control private, max-age=0
+  content-type text/html; charset=ISO-8859-1
+  content-security-policy-report-only object-src 'none';base-uri 'self';script-src 'nonce-MhcSzJIcmeg8Jjrkiz0CcA' 'strict-dynamic' 'report-sample' 'unsafe-eval' 'unsafe-inline' https: http:;report-uri https://csp.withgoogle.com/csp/gws/other-hp
+  accept-ch Sec-CH-Prefers-Color-Scheme
+  p3p CP="This is not a P3P policy! See g.co/p3phelp for more info."
+  server gws
+  x-xss-protection 0
+  x-frame-options SAMEORIGIN
+  set-cookie AEC=AVcja2cAnqfAPwrl34NX5U24bdSXBTFmjsthLTtlX_GtJHBnd4WgXJkt7g; expires=Tue, 30-Sep-2025 19:11:04 GMT; path=/; domain=.google.com; Secure; HttpOnly; SameSite=lax__Secure-ENID=26.SE=Mx5g0g5Wnm5kYyDFq1dnHTq0J2n2YOLaPntvlWRNCDGLSmIqbp1Kvt_I_Zvtkvz2v4RUVoD53aivXetCwGAwx0CCil4aIAZTy1wMPGUkS4h_C1M1SkRZzt_AdTfp6VzJ4FYnZolrOdEsdB77ZZ5NGWufdvfEGYiTAzurJTeUkZCTIC62W5JafO8SxTru9JxPGFPn42uAfEJqXOU4NyeN2lBAzMh8_SyioB_TOZgEJ21-_u7jtWFYIZp3gUq3l-nr; expires=Mon, 04-May-2026 11:29:22 GMT; path=/; domain=.google.com; Secure; HttpOnly; SameSite=lax
+  alt-svc h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+  accept-ranges none
+  vary Accept-Encoding
+}
+
+[SD] Time elapsed: 11527ms
+
+
+
+
+smalldragon@smalldragon-Latitude-5550:~/Workspace/quiche$ ./tcp_client.sh 
+TCP connected to 127.0.0.1:4433
+[SD] Send CONNECT to proxy
+[SD] Sending h1.1 CONNECT request to www.google.com:443
+[SD] Received Data from transport: 39 bytes - 101ms
+[SD] Received CONNECT response: HTTP/1.1 200 Connection established
+
+ - 101ms
+[SD] Start TLS handshaking
+[SD] TLS wrote 517 bytes to transport
+[SD] Received Data from transport: 938 bytes - 101ms
+[SD] TLS connected - 203ms
+[SD] TLS wrote 227 bytes to transport
+[SD] Received Data from transport: 184 bytes - 8ms
+[SD] Received Data from transport: 31 bytes - 40ms
+[SD] Received Data from transport: 896 bytes - 37ms
+[SD] Received Data from transport: 13411 bytes - 2ms
+[SD] Received Data from transport: 1491 bytes - 1ms
+[SD] Received Data from transport: 13049 bytes - 1ms
+[SD] Received Data from transport: 16384 bytes - 41ms
+[SD] Received Data from transport: 7353 bytes - 2ms
+[SD] Received Data from transport: 772 bytes - 60ms
+Received h2 response headers: 
+{
+  :status 200
+  date Fri, 04 Apr 2025 09:11:33 GMT
+  expires -1
+  cache-control private, max-age=0
+  content-type text/html; charset=ISO-8859-1
+  content-security-policy-report-only object-src 'none';base-uri 'self';script-src 'nonce-V5ULTumGFz_Vx8Pi62BTmw' 'strict-dynamic' 'report-sample' 'unsafe-eval' 'unsafe-inline' https: http:;report-uri https://csp.withgoogle.com/csp/gws/other-hp
+  accept-ch Sec-CH-Prefers-Color-Scheme
+  p3p CP="This is not a P3P policy! See g.co/p3phelp for more info."
+  server gws
+  x-xss-protection 0
+  x-frame-options SAMEORIGIN
+  set-cookie AEC=AVcja2c5Ih8CXKXc2xGnlHiivtMr55FjzGf1pE1UoyNBoJLFnUtaii77VQ; expires=Wed, 01-Oct-2025 09:11:33 GMT; path=/; domain=.google.com; Secure; HttpOnly; SameSite=lax__Secure-ENID=26.SE=I2cAzlc2ocJ3gHnzbLEd7auxBXu5oGEVyTIN8OqrstrpF16j8qwHlfpnSXKWvuBqliGY4Mvff5pwpD9nN0znNnDFJzQwBaZb1MjNRVK_AgageMt3SnjM6BEleiqGFBGxGmFBwE2C_5CkStUij4nXU8saiAAR7XCi_41c5vGiNxmPhE0KlzfIv0zCkV4bFzklQ9IuqmUUiKgw6bPq-CZ2nm4t7leZsMxRXkQM3DG1IPw348TISUHDoLSNl6N0vZwl; expires=Tue, 05-May-2026 01:29:51 GMT; path=/; domain=.google.com; Secure; HttpOnly; SameSite=lax
+  alt-svc h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+  accept-ranges none
+  vary Accept-Encoding
+}
+
+[SD] Time elapsed: 394ms
