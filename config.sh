@@ -66,7 +66,7 @@ ALT_IF=""
 
 
 # MASQUE proxy
-MASQUE_HOST="0.0.0.0"
+MASQUE_HOST="1.1.1.1"
 MASQUE_PORT="9661"
 
 
